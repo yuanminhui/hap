@@ -1,0 +1,35 @@
+# Get GFA version from header
+'$1 == "H" {for (i = 2; i <= NF; ++i) if ($i ~ /^VN:/) {split($i, a, ":"); print a[3]}}'
+
+
+# Move sequences
+# v1
+'BEGIN {OFS="\t"} {/^S/ {if ($3 != "*") {print $2, $3 | "gzip 
+            > sequences.txt.gz"; len = length($3); $3 = "*"; if (!match($0, /LN:/)) $0 = $0 
+            "\tLN:i:" len}} print}'
+# v2
+'BEGIN {OFS="\t"} {/^S/ {if ($4 != "*") {print $2, $4 | "gzip 
+            > sequences.txt.gz"; $4 = "*"}} print}'
+
+
+# Extract subgraph names
+# v1
+'{split($2, a, "[ ,.;:/|#_-]"); if (length(a) < 3) exit; else print a[3]}'
+# v2
+'{print $4}'
+
+
+# Extract node ids from set records
+# v1.0
+'/^P/ {split($3,a,","); for (i in a) print substr(a[i], 1, length(a[i]) - 1)}'
+# v1.1
+'/^W/ {split($7,a,"[<>]"); for (i=2;i in a;i++) print a[i]}'
+# v2.0
+'/^O/ {split($3,a," "); for (i in a) print a[i]} /^U/ {split($3,a," "); for (i in a) print substr(a[i], 1, length(a[i]) - 1)}'
+
+
+# Convert GFA to CSV
+# v1
+'BEGIN { OFS=","; print "name", "length" > "nodes.csv"; print "source", "target" > "edges.csv"} /^S/ {if (match($0, /LN:i:[0-9]+/)) {s = substr($0, RSTART, RLENGTH); split(s, a, ":"); len = a[3]} else len = -1; print $2, len >> "nodes.csv"} /^L/ { print $2, $4 >> "edges.csv" } /^P/ {split($3,a,","); nc = length(a); print "start", substr(a[1],1,length(a[1])-1) "\n" substr(a[nc],1,length(a[nc]-1)), "end" >> "edges.csv"} /^W/ {split($7,a,"[<>]"); nc = length(a); print "start", a[2] "\n" a[nc], "end" >> "edges.csv"}'
+# v2
+'BEGIN { OFS=","; print "name", "length" > "nodes.csv"; print "source", "target" > "edges.csv"} /^S/ {print $2, $3 >> "nodes.csv"} /^E/ { print substr($3, 1, length($3) - 1), substr($4, 1, length($4) - 1) >> "edges.csv" } /^O/ {split($3,a," "); nc = length(a); print "start", a[1] "\n" a[nc], "end" >> "edges.csv"} /^U/ {split($3,a," "); nc = length(a); print "start", substr(a[1],1,length(a[1])-1) "\n" substr(a[nc],1,length(a[nc]-1)), "end" >> "edges.csv"}'
