@@ -5,7 +5,7 @@ class Segment:
         self.start = 0
         self.end = 0
         self.sub_regions = []
-        self.levels = [0]
+        self.level_range = [0, 0]
         self.length = 0
         self.is_default = False
         self.rank = 0
@@ -26,7 +26,7 @@ class Region:
         self.end = 0
         self.parent_seg = None
         self.segments = []
-        self.levels = [0]
+        self.level_range = [0, 0]
         self.length = 0
         self.is_default = False
         self.is_var = True if type == "var" or type != "con" else False
@@ -46,7 +46,7 @@ class Region:
         if self.type == "con" and len(self.segments) == 0:
             segment.is_default = True
         self.segments.append(segment.id)
-        segment.levels = self.levels
+        segment.level_range = self.level_range
         return segment
 
     def to_dict(self):
@@ -101,7 +101,7 @@ def graph2rstree(graph: Graph) -> tuple[pd.DataFrame, pd.DataFrame]:
             "end",
             "parent_seg",
             "segments",
-            "levels",
+            "level_range",
             "length",
             "is_default",
             "is_var",
@@ -119,7 +119,7 @@ def graph2rstree(graph: Graph) -> tuple[pd.DataFrame, pd.DataFrame]:
             "start",
             "end",
             "sub_regions",
-            "levels",
+            "level_range",
             "length",
             "is_default",
             "rank",
@@ -145,12 +145,12 @@ def graph2rstree(graph: Graph) -> tuple[pd.DataFrame, pd.DataFrame]:
             # get current level
             parseg_id = se["parent_seg"]
             pi = st[st["id"] == parseg_id].index[0]
-            level = st.iat[pi, st.columns.get_loc("levels")][0] + 1
+            level = st.iat[pi, st.columns.get_loc("level_range")][0] + 1
 
             # build elements and fill properties
             region = Region(get_id("r"), "con")
             segment = region.add_segment(se["name"])
-            segment.levels = region.levels = [level]
+            segment.level_range = region.level_range = [level, level]
             segment.length = se["length"]
             region.parent_seg = parseg_id
 
@@ -200,12 +200,12 @@ def graph2rstree(graph: Graph) -> tuple[pd.DataFrame, pd.DataFrame]:
     )
 
     # Fill other fields from leaves to root
-    maxlevel = rt["levels"].apply(lambda ls: ls[0]).max()
+    maxlevel = rt["level_range"].apply(lambda lr: lr[1]).max()
     for i in range(
         maxlevel, -1, -1
     ):  # process regions from maxlevel to 0, segments from (maxlevel - 1) to 0
         ris: list[int] = rt[
-            rt["levels"].apply(lambda ls: i in ls)
+            rt["level_range"].apply(lambda lr: i >= lr[0] and i <= lr[1])
         ].index.tolist()  # regions at the same level
         for ri in ris:
             # fill region `length` from child segment's max length
@@ -280,7 +280,7 @@ def graph2rstree(graph: Graph) -> tuple[pd.DataFrame, pd.DataFrame]:
 
         if i >= 1:
             sis = st[
-                (st["levels"].apply(lambda ls: i - 1 in ls))
+                (st["level_range"].apply(lambda lr: i - 1 >= lr[0] and i - 1 <= lr[1]))
                 & (st["sub_regions"].apply(len) > 0)
             ].index.tolist()  # (non-leaf) segments at the higher level
             for si in sis:
@@ -357,13 +357,13 @@ def process_path(
             # Get parent segment's properties
             parseg_id = g.vs[before]["parent_seg"]
             pi = st[st["id"] == parseg_id].index[0]
-            level = st.iat[pi, st.columns.get_loc("levels")][0] + 1
+            level = st.iat[pi, st.columns.get_loc("level_range")][0] + 1
             subrg = st.iat[pi, st.columns.get_loc("sub_regions")]
 
             # Build elements and fill properties
             if g.vs[before]["name"] != "start":
                 pre_region = Region(get_id("r"), "con")
-                pre_region.levels = [level]
+                pre_region.level_range = [level, level]
                 pre_seg = pre_region.add_segment(g.vs[before]["name"])
                 pre_seg.length = g.vs[before]["length"]
                 pre_region.parent_seg = parseg_id
@@ -381,7 +381,7 @@ def process_path(
                 subrg.append(pre_region.id)
             region = Region(get_id("r"), "var")
             segment = Segment(get_id("s"))
-            segment.levels = region.levels = [level]
+            segment.level_range = region.level_range = [level, level]
             segment.is_default = True  # set the first added segment to default
             g.vs[before]["parent_seg"] = None  # "before" can't be accessed anymore
             region.parent_seg = parseg_id
@@ -393,7 +393,7 @@ def process_path(
         else:
             region = rt[rt["before"] == g.vs[before]["name"]].iloc[0].to_dict()
             segment = Segment(get_id("s"))
-            segment.levels = region.levels
+            segment.level_range = region.level_range
 
     # Generate current path & process its nodes
     path = []
@@ -418,7 +418,7 @@ def process_path(
                     #             s = other
                     #             break
             if not s:
-                raise Exception("Internal Error: unsolved graph structure.")
+                raise SystemExit("Internal Error: unsolved graph structure.")
 
             d = g.add_vertex(get_id("s"), length=0).index
             g.add_edges([(s, d), (d, node)])
@@ -482,7 +482,7 @@ def process_path(
             ale_seg = Segment(get_id("s"))
             for v in org_ale_path:
                 g.vs[v]["parent_seg"] = ale_seg.id  # Update parent for separable nodes
-        ale_seg.levels = [level]
+        ale_seg.level_range = [level, level]
         region.segments.append(ale_seg.id)
         st = pd.concat(
             [st, pd.DataFrame([ale_seg.to_dict()])], ignore_index=True, copy=False
@@ -499,24 +499,34 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, minres=0.04):
 
     if minres <= 0:
         raise ValueError("Min resolution must be greater than 0.")
-    totallen = rt[rt["levels"].apply(lambda ls: 0 in ls)]["length"].iloc[0]
+    totallen = rt[rt["level_range"].apply(lambda lr: lr[0] == 0 and lr[1] == 0)][
+        "length"
+    ].iloc[0]
     maxlevel = math.ceil(
         math.log2(totallen / 1000 / minres)
     )  # new max level for hierarchical graph
     meta = {"max_level": maxlevel, "total_length": int(totallen)}
     minlenpx = 1 / minres
-    # clear old levels
-    mask = rt["levels"].apply(lambda ls: ls[0] > 1)
-    rt.loc[mask, "levels"] = rt.loc[mask, "levels"].apply(lambda x: [])
-    mask = st["levels"].apply(lambda ls: ls[0] > 1)
-    st.loc[mask, "levels"] = st.loc[mask, "levels"].apply(lambda x: [])
+    # clear old level ranges
+    mask = rt["level_range"].apply(lambda lr: lr[1] > 1)
+    rt.loc[mask, "level_range"] = rt.loc[mask, "level_range"].apply(lambda lr: [])
+    mask = st["level_range"].apply(lambda lr: lr[1] > 1)
+    st.loc[mask, "level_range"] = st.loc[mask, "level_range"].apply(lambda lr: [])
 
     # Traverse the hierarchical graph from top to bottom
     for i in range(1, maxlevel):  # exclude top & bottom layer
         res = 2 ** (maxlevel - i) * minres
-        rmdregions = set(rt[rt["levels"].apply(lambda ls: i in ls)]["id"].to_list())
+        rmdregions = set(
+            rt[
+                rt["level_range"].apply(
+                    lambda lr: len(lr) > 0 and i >= lr[0] and i <= lr[1]
+                )
+            ]["id"].to_list()
+        )
         parseg_df = st[
-            st["levels"].apply(lambda ls: i - 1 in ls)
+            st["level_range"].apply(
+                lambda lr: len(lr) > 0 and i - 1 >= lr[0] and i - 1 <= lr[1]
+            )
             & (st["sub_regions"].apply(len) > 0)
         ]
 
@@ -587,17 +597,16 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, minres=0.04):
                 and r2bw_iranges[0][1] == len(rid_list) - 1
             ):
                 si = st[st["id"] == region["parent_seg"]].index.to_list()[0]
-                levels = st.iat[si, st.columns.get_loc("levels")]
-                levels.append(i)
-                # st.iat[si, st.columns.get_loc("levels")] = levels
+                lvlrg = st.iat[si, st.columns.get_loc("level_range")]
+                lvlrg[1] = i  # NOTE: update df cell in place
                 mask = rt["id"].isin(rid_list)
-                rt.loc[mask, "levels"] = rt.loc[mask, "levels"].apply(
-                    lambda ls: [i + 1]
+                rt.loc[mask, "level_range"] = rt.loc[mask, "level_range"].apply(
+                    lambda lr: [i + 1, i + 1]
                 )
                 segments = rt.loc[mask, "segments"].sum()
                 mask = st["id"].isin(segments)
-                st.loc[mask, "levels"] = st.loc[mask, "levels"].apply(
-                    lambda ls: [i + 1]
+                st.loc[mask, "level_range"] = st.loc[mask, "level_range"].apply(
+                    lambda lr: [i + 1, i + 1]
                 )
                 normal_regions = set()
                 r2bw_iranges = []
@@ -612,9 +621,8 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, minres=0.04):
                 # build wrapper elements and fill properties
                 # if len(rid_list) > 0:
                 wrap_region = Region(get_id("r"), "con")
-                wrap_region.levels = [i]
+                wrap_region.level_range = [i, i]
                 wrap_segment = wrap_region.add_segment(get_id("s"))
-                # wrap_segment.levels = wrap_region.levels = [i]
                 wrap_region.length = (
                     wrap_region.min_length
                 ) = wrap_segment.length = totallen
@@ -675,13 +683,13 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, minres=0.04):
                 mask = rt["id"].isin(r2bw_ids)
                 # if len(rid_list) > 0:
                 rt.loc[mask, "parent_seg"] = wrap_segment.id
-                rt.loc[mask, "levels"] = rt.loc[mask, "levels"].apply(
-                    lambda ls: [i + 1]
+                rt.loc[mask, "level_range"] = rt.loc[mask, "level_range"].apply(
+                    lambda lr: [i + 1, i + 1]
                 )
                 segments = rt.loc[mask, "segments"].sum()
                 mask = st["id"].isin(segments)
-                st.loc[mask, "levels"] = st.loc[mask, "levels"].apply(
-                    lambda ls: [i + 1]
+                st.loc[mask, "level_range"] = st.loc[mask, "level_range"].apply(
+                    lambda lr: [i + 1, i + 1]
                 )
 
             if len(r2bw_iranges) > 0:
@@ -695,25 +703,25 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, minres=0.04):
                 # If no child segment exists, copy current region & segments to next layer
                 if st.iloc[sis]["sub_regions"].apply(lambda rgs: rgs == []).all():
                     mask = rt["id"] == region["id"]
-                    rt.loc[mask, "levels"] = rt.loc[mask, "levels"].apply(
-                        lambda ls: [i, i + 1]
+                    rt.loc[mask, "level_range"] = rt.loc[mask, "level_range"].apply(
+                        lambda lr: [i, i + 1]
                     )
-                    st.loc[sis, "levels"] = st.loc[sis, "levels"].apply(
-                        lambda ls: [i, i + 1]
+                    st.loc[sis, "level_range"] = st.loc[sis, "level_range"].apply(
+                        lambda lr: [i, i + 1]
                     )
                 # Otherwise, replace current elements with child structure
                 else:
                     sub_regions = st.iloc[sis]["sub_regions"].sum()
                     mask = rt["id"].isin(sub_regions)
-                    rt.loc[mask, "levels"] = rt.loc[mask, "levels"].apply(
-                        lambda ls: [i + 1]
+                    rt.loc[mask, "level_range"] = rt.loc[mask, "level_range"].apply(
+                        lambda lr: [i + 1, i + 1]
                     )
                     subrg_segments = rt.loc[
                         rt["id"].isin(sub_regions), "segments"
                     ].sum()
                     mask = st["id"].isin(subrg_segments)
-                    st.loc[mask, "levels"] = st.loc[mask, "levels"].apply(
-                        lambda ls: [i + 1]
+                    st.loc[mask, "level_range"] = st.loc[mask, "level_range"].apply(
+                        lambda lr: [i + 1, i + 1]
                     )
 
         # Copy inherited elements directly to next layer
@@ -721,15 +729,15 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, minres=0.04):
         for ri in ris:
             segments = rt.iloc[ri]["segments"]
             sis = st[st["id"].isin(segments)].index.to_list()
-            levels = rt.iat[ri, rt.columns.get_loc("levels")]
-            levels.append(i + 1)
-            rt.iat[ri, rt.columns.get_loc("levels")] = levels
-            st.iloc[sis, st.columns.get_loc("levels")] = st.iloc[
-                sis, st.columns.get_loc("levels")
-            ].apply(lambda ls: levels)
+            lvlrg = rt.iat[ri, rt.columns.get_loc("level_range")]
+            lvlrg[1] = i + 1  # NOTE: update df cell in place
+            # rt.iat[ri, rt.columns.get_loc("level_range")] = lr
+            st.iloc[sis, st.columns.get_loc("level_range")] = st.iloc[
+                sis, st.columns.get_loc("level_range")
+            ].apply(lambda lr: lvlrg)
 
     # TODO: Find algorithm to unwrap all elements within max level limit
-    if len(rt[rt["levels"].apply(lambda ls: len(ls) == 0)]) > 0:
+    if len(rt[rt["level_range"].apply(lambda lr: len(lr) == 0)]) > 0:
         raise Exception(
             "Warning: There are small regions remain wrapped, to unwrap all regions, flatten your input graph or decrease `minres`."
         )
@@ -783,6 +791,13 @@ def build_index(rt: pd.DataFrame, st: pd.DataFrame, meta: dict):
 
     rt.drop(["min_length", "before", "after"], axis=1, inplace=True)
     return rt, st, meta
+
+
+def calculate_properties(rt, st, meta):
+    """Calculates the properties for elements in the region-segment tree."""
+
+    for i in range(0, meta.maxlevel + 1):
+        pass
 
 
 def export(
@@ -893,12 +908,22 @@ def register_command(subparsers: argparse._SubParsersAction, module_help_map: di
     )
 
 
+def gzip_gfa(filepath: str):
+    """Gzip a GFA file and return the compressed file path."""
+
+    outfp = filepath + ".gz"
+    with open(outfp, "w") as file:
+        subprocess.run(["gzip", "-c", filepath], stdout=file)
+
+    return outfp
+
+
 def get_gfa_version(filepath: str) -> float:
     """Get the version of a (gzipped) GFA file. When no `VN` tag in `H` line is
     provided, an examination will run."""
 
     # a quick scan on version record
-    read_version_cmd = [
+    cmd_rv = [
         "zcat",
         filepath,
         "|",
@@ -909,12 +934,12 @@ def get_gfa_version(filepath: str) -> float:
         "awk",
         """'$1 == "H" {for (i = 2; i <= NF; ++i) if ($i ~ /^VN:/) {split($i, a, ":"); print a[3]}}'""",
     ]
-    version = subprocess.check_output(" ".join(read_version_cmd), shell=True, text=True)
+    ver = subprocess.check_output(" ".join(cmd_rv), shell=True, text=True)
     try:
-        version = float(version)
+        ver = float(ver)
     except ValueError:
         # examine the essential charistics a version has
-        examine_char_cmd = [
+        cmd_ec = [
             "zcat",
             filepath,
             "|",
@@ -925,49 +950,46 @@ def get_gfa_version(filepath: str) -> float:
             "-E",
             "^(E|J|W)",
         ]
-        char = subprocess.check_output(
-            " ".join(examine_char_cmd), shell=True, text=True
-        )
+        char = subprocess.check_output(" ".join(cmd_ec), shell=True, text=True)
         if char == "E":
-            version = 2.0
+            ver = 2.0
         elif char == "J":
-            version = 1.2
+            ver = 1.2
         elif char == "W":
-            version = 1.1
+            ver = 1.1
         else:
-            version = 1.0
+            ver = 1.0
     finally:
-        return version
+        return ver
 
 
-def move_sequences(filepath: str, gfa_version: float):
-    """Move the sequences in a (gzipped) GFA file to `sequences.txt.gz`, leaving
+def move_sequences(filepath: str, outdir: str, gfa_version: float):
+    """Move the sequences in a (gzipped) GFA file to `sequence.txt.gz`, leaving
     a `*` as placeholder, add `LN` tag if not exist, and return the file path of
     the modified GFA file."""
 
-    seqfn = "sequence.txt.gz"
-    outfp = filepath.replace(".gfa", "min.gfa")
+    seqfp = outdir + "/sequence.txt.gz"
+    outfp = filepath.replace(".gfa.gz", ".min.gfa.gz")
+    if os.path.exists(seqfp):
+        os.remove(seqfp)
 
     zcat = [
         "zcat",
         filepath,
     ]
+    # `awk` -- move sequences and calculate segment length
     awk = ["|", "awk"]
     gzip = [
         "|",
         "gzip",
     ]
-
     if gfa_version < 2:
         awk.append(
-            f"""'BEGIN {{OFS="\t"}} {{/^S/ {{if ($3 != "*") {{print $2, $3 | "gzip 
-            > {seqfn}"; len = length($3); $3 = "*"; if (!match($0, /LN:/)) $0 = $0 
-            "\tLN:i:" len}}}} print}}'"""
+            f"""'BEGIN {{OFS="\\t"}} /^S/ {{if ($3 != "*") {{cmd = "gzip >> {seqfp}"; print $2, $3 | cmd; close(cmd); len = length($3); $3 = "*"; if (!match($0, /LN:/)) $0 = $0 "\tLN:i:" len}}}} {{print}}'"""
         )
     else:  # GFA 2
         awk.append(
-            f"""'BEGIN {{OFS="\t"}} {{/^S/ {{if ($4 != "*") {{print $2, $4 | "gzip 
-            > {seqfn}"; $4 = "*"}}}} print}}'"""
+            f"""'BEGIN {{OFS="\\t"}} /^S/ {{if ($4 != "*") {{cmd = "gzip >> {seqfp}"; print $2, $4 | cmd; close(cmd); $4 = "*"}}}} {{print}}'"""
         )
 
     cmd = zcat + awk + gzip
@@ -994,23 +1016,25 @@ def extract_subgraph_names(
         "|",
         "awk",
     ]
-    sort = ["|", "sort", "-u"]
-
+    # `grep1` -- get records containing subgraph names
+    # `awk` -- extract subgraph names
     if gfa_version < 1.1:
         grep1 = grep + ["^P"]
         awk.append(
-            """'{split($2, a, "[ ,.;:/|#_-]"); if (length(a) < 3) exit; else print a[3]}'"""
+            r"""'{if (sep=="") {split(" 0,0\\.0;0:0/0\\|0#0_0\\-", seps, "0"); for (i in seps) {sep = seps[i]; c = gsub(sep,sep,$2); if (c==2) break} if (c!=2) exit} {split($2,a,sep); if (length(a)<3) next; else print a[3]}}'"""
         )
     elif gfa_version >= 2.0:
         grep1 = grep + ["-E", "^(O|U)"]
         awk.append(
-            """'{split($2, a, "[ ,.;:/|#_-]"); if (length(a) < 3) exit; else print a[3]}'"""
+            r"""'{if (sep=="") {split(" 0,0\\.0;0:0/0\\|0#0_0\\-", seps, "0"); for (i in seps) {sep = seps[i]; c = gsub(sep,sep,$2); if (c==2) break} if (c!=2) exit} {split($2,a,sep); if (length(a)<3) next; else print a[3]}}'"""
         )
     else:
         grep1 = grep + ["^W"]
         awk.append("'{print $4}'")
+    sort = ["|", "sort", "-u"]
 
     cmd = zcat + grep1 + awk + sort
+    # filter out non-chromosome level subgraphs
     if chr_only:
         grep2 = grep + ["-i", "^chr"]
         cmd += grep2
@@ -1021,40 +1045,38 @@ def extract_subgraph_names(
 def extract_subgraph(name: str, gfa_path: str, gfa_version: float, outdir: str):
     """Extract a subgraph by name from a (gzipped) GFA file, returning the sub-GFA's file path."""
 
-    outfp = outdir + "/" + name + "gfa.gz"
+    outfp = outdir + "/" + name + ".gfa.gz"
 
-    zgrep = [
-        "zgrep",
-    ]
+    zgrep = ["zgrep", "-E"]
     awk = ["|", "awk"]
-    gzip = ["|", "gzip"]
-
     # `zgrep1` -- get records that contain set of nodes from the whole graph by subgraph name
-    # `zgrep2` -- get related records from the whole graph by segment id
     # `awk` -- extract node ids from set records
     if gfa_version < 2:
         if gfa_version == 1.0:
-            zgrep1 = zgrep + ["-E", f"^P.*{name}"]
+            zgrep1 = zgrep + [f"^P.*{name}"]
             awk.append(
                 """'/^P/ {split($3,a,","); for (i in a) print substr(a[i], 1, length(a[i]) - 1)}'"""
             )
         elif gfa_version == 1.1:
-            zgrep1 = zgrep + ["-E", f"^W.*{name}"]
+            zgrep1 = zgrep + [f"^W.*{name}"]
             awk.append(
                 """'/^W/ {split($7,a,"[<>]"); for (i=2;i in a;i++) print a[i]}'"""
             )
     else:  # GFA 2
-        zgrep1 = zgrep + ["-E", f"^(O|U).*{name}"]
+        zgrep1 = zgrep + [f"^(O|U).*{name}"]
         awk.append(
             """'/^O/ {split($3,a," "); for (i in a) print a[i]} /^U/ {split($3,a," "); for (i in a) print substr(a[i], 1, length(a[i]) - 1)}'"""
         )
     zgrep1.append(gfa_path)
-    awk.append("|")
-    zgrep2 = zgrep + ["-F", "-f", "-", gfa_path]
+    # `tee` -- save set records to subgraph
+    tee = ["|", "tee", f">(gzip > {outfp})"]
+    # `sed` & `zgrep2` -- get related records from the whole graph by segment id
+    sed = ["|", "sed", r"'s/^/\t/;s/$/[+-]?\t/'", "|"]
+    zgrep2 = zgrep + ["-f", "-", gfa_path]
+    gzip = ["|", "gzip", ">>", outfp]
 
-    cmd = zgrep1 + awk + zgrep2 + gzip
-    with open(outfp, "w") as file:
-        subprocess.run(" ".join(cmd), shell=True, stdout=file)
+    cmd = zgrep1 + tee + awk + sed + zgrep2 + gzip
+    subprocess.run(" ".join(cmd), shell=True, executable="/bin/bash")
 
     return outfp
 
@@ -1068,37 +1090,69 @@ def subgraph_hpbuilder(
         subg_name = os.path.basename(filepath).replace(".gfa.gz", "")
     outfp_base = outdir + "/" + subg_name
 
+    # create temp files
     fd, nodefp = tempfile.mkstemp()
     os.close(fd)
     fd, edgefp = tempfile.mkstemp()
     os.close(fd)
+    fd, edgetmp = tempfile.mkstemp()
+    os.close(fd)
 
+    zcat = ["zcat", filepath]
     # `awk` -- convert the GFA format subgraph to CSV table of nodes and edges
     awk = ["|", "awk"]
     if gfa_version < 2:
         awk.append(
-            f"""'BEGIN {{ OFS=","; print "name", "length" > "{nodefp}"; print "source", "target" > "{edgefp}"}} /^S/ {{if (match($0, /LN:i:[0-9]+/)) {{s = substr($0, RSTART, RLENGTH); split(s, a, ":"); len = a[3]}} else len = -1; print $2, len >> "{nodefp}"}} /^L/ {{ print $2, $4 >> "{edgefp}" }} /^P/ {{split($3,a,","); nc = length(a); print "start", substr(a[1],1,length(a[1])-1) "\n" substr(a[nc],1,length(a[nc]-1)), "end" >> "{edgefp}" /^W/ {{split($7,a,"[<>]"); nc = length(a); print "start", a[2] "\n" a[nc], "end" >> "{edgefp}"}}'"""
+            f"""'BEGIN {{ OFS=","; print "start,0\\nend,0" > "{nodefp}"; print "source", "target" > "{edgefp}"}} /^S/ {{if (match($0, /LN:i:[0-9]+/)) {{s = substr($0, RSTART, RLENGTH); split(s, a, ":"); len = a[3]}} else len = -1; print $2, len >> "{nodefp}"}} /^L/ {{ print $2, $4 >> "{edgefp}" }} /^P/ {{split($3,a,","); nc = length(a); print "start", substr(a[1],1,length(a[1])-1) "\\n" substr(a[nc],1,length(a[nc]-1)), "end" >> "{edgefp}"}} /^W/ {{split($7,a,"[<>]"); nc = length(a); print "start", a[2] "\\n" a[nc], "end" >> "{edgefp}"}}'"""
         )  # in GFA 1 there is a situation that lacks segment length, -1 is set here and pass to subsequent processing
     else:  # GFA 2
         awk.append(
-            f"""'BEGIN {{ OFS=","; print "name", "length" > "{nodefp}"; print "source", "target" > "{edgefp}"}} /^S/ {{print $2, $3 >> "{nodefp}"}} /^E/ {{ print substr($3, 1, length($3) - 1), substr($4, 1, length($4) - 1) >> "{edgefp}" }} /^O/ {{split($3,a," "); nc = length(a); print "start", a[1] "\n" a[nc], "end" >> "{edgefp}"}} /^U/ {{split($3,a," "); nc = length(a); print "start", substr(a[1],1,length(a[1])-1) "\n" substr(a[nc],1,length(a[nc]-1)), "end" >> "{edgefp}"}}'"""
+            f"""'BEGIN {{ OFS=","; print "start,0\\nend,0" > "{nodefp}"; print "source", "target" > "{edgefp}"}} /^S/ {{print $2, $3 >> "{nodefp}"}} /^E/ {{ print substr($3, 1, length($3) - 1), substr($4, 1, length($4) - 1) >> "{edgefp}" }} /^O/ {{split($3,a," "); nc = length(a); print "start", a[1] "\\n" a[nc], "end" >> "{edgefp}"}} /^U/ {{split($3,a," "); nc = length(a); print "start", substr(a[1],1,length(a[1])-1) "\\n" substr(a[nc],1,length(a[nc]-1)), "end" >> "{edgefp}"}}'"""
         )
 
-    nodedf = pd.read_csv(
-        f"{nodefp}", index_col="name", dtype={"name": "str", "length": "int32"}
-    )
+    # `sort` & `join` -- remove edges with absent segment id
+    sort = ["sort", "-t", ",", "-k"]
+    sort_n = sort + ["1,1", "-o", nodefp, nodefp]
+    sort_e1 = sort + ["1,1", "-o", edgetmp, edgefp]
+    sort_e2 = ["|"] + sort + ["2,2", "|"]
+    join = ["join", "-t", ","]
+    join1 = join + ["-1", "1", "-2", "1", "-o", "2.1,2.2", nodefp, edgetmp]
+    join2 = join + ["-1", "2", "-2", "1", "-o", "1.1,1.2", "-", nodefp, ">", edgefp]
+
+    # `sed` -- add table headers
+    sed = ["sed", "-i"]
+    sed_n = sed + [r"1i\name,length", nodefp]
+    sed_e = sed + [r"1i\source,target", edgefp]
+
+    cmd1 = zcat + awk
+    cmd2 = join1 + sort_e2 + join2
+    subprocess.run(" ".join(cmd1), shell=True)
+    subprocess.run(sort_n)
+    subprocess.run(sort_e1)
+    subprocess.run(" ".join(cmd2), shell=True)
+    subprocess.run(sed_n)
+    subprocess.run(sed_e)
+
+    # convertions
+    nodedf = pd.read_csv(f"{nodefp}", dtype={"name": "str", "length": "int32"})
     edgedf = pd.read_csv(f"{edgefp}", dtype={"source": "str", "target": "str"})
     g = Graph.DataFrame(edgedf, vertices=nodedf, use_vids=False)
     if not g.is_dag:
         raise ValueError("Cycle detected in graph, modify it into a DAG and re-run.")
     rt, st = graph2rstree(g)
+
     # if not args.no_wrap:
     rt, st, meta = wrap_rstree(rt, st, args.minres)
     rt, st, meta = build_index(rt, st, meta)
     if args.split:
-        export(rt, st, meta, "tsv", outfp_base)
+        export(rt, st, meta, outfp_base, "tsv")
     else:
-        export(rt, st, meta, "hp", outfp_base)
+        export(rt, st, meta, outfp_base, "hp")
+
+    # remove temp files
+    os.remove(nodefp)
+    os.remove(edgefp)
+    os.remove(edgetmp)
 
 
 def hpbuilder(args):
@@ -1108,23 +1162,42 @@ def hpbuilder(args):
     #     # TODO: parse .hp file and run build_hierarchical_graph()
     #     pass
 
+    # env var for performance
+    os.environ["LC_ALL"] = "C"
+
     outdir = args.outdir if args.outdir else os.getcwd()
-    pgname = (
-        args.name
-        if args.name
-        else os.path.basename(args.file).replace(".gfa", "").replace(".gz", "")
-    )
-    gfaver = get_gfa_version(args.file)
-    gfafp = move_sequences(args.file, gfaver)
-    subgnames = extract_subgraph_names(gfafp, gfaver)
+    gfagz = (
+        args.file if ".gz" in args.file else gzip_gfa(args.file)
+    )  # temp gzipped GFA for process performance
+    pgname = args.name if args.name else os.path.basename(gfagz).replace(".gfa.gz", "")
+    gfaver = get_gfa_version(gfagz)
+
+    # preprocess
+    gfamin = move_sequences(gfagz, outdir, gfaver)
+    subgnames = extract_subgraph_names(gfamin, gfaver)
+
+    # build Hierachical Pangenomes
     if len(subgnames) == 0:
-        subgraph_hpbuilder(gfafp, outdir, gfaver, args, pgname)
+        subgraph_hpbuilder(gfamin, outdir, gfaver, args, pgname)
     else:
         subgdir = outdir + "/subgraph"
+        if os.path.exists(subgdir):
+            ctn = input(
+                "There is a directory 'subgraph' in the output directory, continuing the program will erase files in it. Continue? (y/n) "
+            )
+            invalid = True
+            while invalid:
+                if ctn.lower() == "y":
+                    subprocess.run(["rm", "-rf", subgdir])
+                    invalid = False
+                elif ctn.lower() == "n":
+                    raise SystemExit("Unable to write to directory.")
+                else:
+                    ctn = input("Please enter 'y' or 'n'. ")
         subprocess.run(["mkdir", subgdir])
         exsubg = functools.partial(
             extract_subgraph,
-            gfa_path=gfafp,
+            gfa_path=gfamin,
             gfa_version=gfaver,
             outdir=subgdir,
         )
@@ -1142,3 +1215,8 @@ def hpbuilder(args):
             union_hps(subgdir, pgname, outdir, "tsv")
         else:
             union_hps(subgdir, pgname, outdir, "hp")
+
+    # remove temp files
+    os.remove(gfamin)
+    if not ".gz" in args.file:
+        os.remove(gfagz)

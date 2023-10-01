@@ -31,6 +31,8 @@ def create_parser():
 
 def main():
     parser = create_parser()
+
+    # print help when no arguments is given
     if len(sys.argv) == 1:
         parser.print_help(sys.stderr)
         sys.exit(1)
