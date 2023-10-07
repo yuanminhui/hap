@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "palchemy"
+version = "0.1.0"
+authors = [
+  { name="yuanminhui", email="inmoinu@gmail.com" },
+]
+description = "Manipulate data around Prowse"
+keywords = ["prowse", "pangenome", "bioinfomatics", "genomics", "data"]
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = [
+    "igraph",
+    "pandas",
+]
+
+[project.scripts]
+palchemy = "src.main:main"
+
+[project.urls]
+"Repository" = "https://github.com/yuanminhui/palchemy.git"
+
+
+[options]
+package_dir= "src"
+
+[options.packages.find]
+where = "src"
