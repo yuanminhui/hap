@@ -24,14 +24,7 @@ dependencies = [
 ]
 
 [project.scripts]
-palchemy = "src.main:main"
+palchemy = "main:main"
 
 [project.urls]
 "Repository" = "https://github.com/yuanminhui/palchemy.git"
-
-
-[options]
-package_dir= "src"
-
-[options.packages.find]
-where = "src"

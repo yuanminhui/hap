@@ -3,6 +3,7 @@ data
 myenv
 test
 
+dist
 .vscode
 __pycache__
 *.egg-info

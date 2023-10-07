@@ -3,9 +3,9 @@ import argparse
 import functools
 import multiprocessing as mp
 
-from ..lib import gfautil
-from ..lib import fileutil
-from .. import palchinfo
+from lib import gfautil
+from lib import fileutil
+import palchinfo
 
 
 _PROG = "divgfa"

@@ -10,10 +10,10 @@ import igraph as ig
 import pandas as pd
 import multiprocessing as mp
 
-from ..lib import gfautil
-from ..lib import fileutil
-from ..lib import typeutil
-from .. import palchinfo
+from lib import gfautil
+from lib import fileutil
+from lib import typeutil
+import palchinfo
 
 
 class Segment:

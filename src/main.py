@@ -2,7 +2,7 @@ import argparse
 import sys
 import importlib
 
-from . import palchinfo
+import palchinfo
 
 
 def create_parser():
@@ -25,7 +25,7 @@ def create_parser():
         title="commands", dest="command", required=True, metavar=""
     )
     for module in palchinfo.modules:
-        importlib.import_module(f".{module}", "src.commands").register_command(
+        importlib.import_module(f".{module}", "commands").register_command(
             subparsers, module_help_map
         )
 
