@@ -13,7 +13,7 @@ import multiprocessing as mp
 from lib import gfautil
 from lib import fileutil
 from lib import typeutil
-import palchinfo
+import hapinfo
 
 # TODO: rewrite some DataFrame operations in a more efficient & elegant way
 
@@ -72,7 +72,7 @@ class Region:
         return self.__dict__
 
 
-_PROG = "hpbuilder"
+_PROG = "build"
 
 
 _ids = {
@@ -939,7 +939,7 @@ def export(
         raise ValueError("Unsupported output format.")
 
 
-def union_hps(
+def union(
     indir: str,
     pgname: str,
     outdir: str,
@@ -966,17 +966,17 @@ def union_hps(
 
 
 def register_command(subparsers: argparse._SubParsersAction, module_help_map: dict):
-    psr_hpbuilder = subparsers.add_parser(
+    psr_build = subparsers.add_parser(
         _PROG,
-        prog=f"{palchinfo.name} {_PROG}",
-        description="Build a Hierarchical Pangenome as an input for Prowse, from a pangenome graph in GFA format.",
+        prog=f"{hapinfo.name} {_PROG}",
+        description="Build a Hierarchical Pangenome from a pangenome graph in GFA format.",
         help="build a Hierarchical Pangenome",
     )
-    psr_hpbuilder.set_defaults(func=main)
-    module_help_map[_PROG] = psr_hpbuilder.print_help
+    psr_build.set_defaults(func=main)
+    module_help_map[_PROG] = psr_build.print_help
 
     # I/O options
-    grp_io = psr_hpbuilder.add_argument_group("I/O options")
+    grp_io = psr_build.add_argument_group("I/O options")
     grp_input = grp_io.add_mutually_exclusive_group(required=True)
     grp_input.add_argument("file", nargs="?", help="input graph file")
     grp_input.add_argument(
@@ -988,7 +988,7 @@ def register_command(subparsers: argparse._SubParsersAction, module_help_map: di
     grp_io.add_argument("-o", "--outdir", help="output directory")
 
     # Build parameters
-    grp_build_params = psr_hpbuilder.add_argument_group("Build parameters")
+    grp_build_params = psr_build.add_argument_group("Build parameters")
     # grp_build_params.add_argument(
     #     "--no-wrap",
     #     action="store_true",
@@ -998,7 +998,7 @@ def register_command(subparsers: argparse._SubParsersAction, module_help_map: di
     #     "-w",
     #     "--wrap",
     #     action="store_true",
-    #     help="Wrap a Region-Segment Tree generated from hpbuilder into a Hierarchical Pangenome",
+    #     help="Wrap a Region-Segment Tree generated from build into a Hierarchical Pangenome",
     # )
     grp_build_params.add_argument(
         "-r",
@@ -1017,9 +1017,9 @@ def gfa2graph(filepath: str, gfa_version: float) -> ig.Graph:
     infofp, nodefp, edgefp, edgetmp = fileutil.create_tmp_files(4)
 
     # get awk scripts
-    awkfp_pps = os.path.join(palchinfo.srcpath, "lib", "parse_pansn_str.awk")
-    awkfp_g12c = os.path.join(palchinfo.srcpath, "lib", "gfa12csv.awk")
-    awkfp_g22c = os.path.join(palchinfo.srcpath, "lib", "gfa22csv.awk")
+    awkfp_pps = os.path.join(hapinfo.srcpath, "lib", "parse_pansn_str.awk")
+    awkfp_g12c = os.path.join(hapinfo.srcpath, "lib", "gfa12csv.awk")
+    awkfp_g22c = os.path.join(hapinfo.srcpath, "lib", "gfa22csv.awk")
 
     zcat = ["zcat", filepath]
     # `awk` -- convert the GFA format subgraph to CSV tables of nodes and edges, plus a info file
@@ -1091,9 +1091,7 @@ def gfa2graph(filepath: str, gfa_version: float) -> ig.Graph:
     return g
 
 
-def hpbuilder(
-    filepath: str, gfa_version: float, outdir: str, args, subg_name: str = None
-):
+def build(filepath: str, gfa_version: float, outdir: str, args, subg_name: str = None):
     """Build a Hierarchical Pangenome from a inseparable graph."""
 
     if not subg_name:
@@ -1108,17 +1106,11 @@ def hpbuilder(
     rst = wrap_rstree(*rst, args.minres)
     rst = calculate_properties_r2l(*rst)
 
-    # TODO: add export
     export(*rst, outfp_base)
 
-    # if args.split:
-    #     export(*rst, outfp_base, "tsv")
-    # else:
-    #     export(*rst, outfp_base, "hp")
 
-
-def parallel_hpbuilder(filepath: list[str] | str, outdir: str, args):
-    """Build Hierarchical Pangenome in parallel for a list of GFA files."""
+def build_in_parallel(filepath: list[str] | str, outdir: str, args):
+    """Build Hierarchical Pangenomes in parallel for a list of GFA files."""
 
     pp_gfa = functools.partial(
         gfautil.preprocess_gfa,
@@ -1130,7 +1122,7 @@ def parallel_hpbuilder(filepath: list[str] | str, outdir: str, args):
     gfavers, gfamins, seqfps = zip(*pp_res)
 
     sg_hpbd = functools.partial(
-        hpbuilder,
+        build,
         outdir=outdir,
         args=args,
     )
@@ -1176,8 +1168,8 @@ def main(args: argparse.Namespace):
         subprocess.run(
             [
                 "python3",
-                f"{palchinfo.srcpath}/main.py",
-                "divgfa",
+                f"{hapinfo.srcpath}/main.py",
+                "divide",
                 args.file,
                 "-o",
                 subgdir,
@@ -1187,10 +1179,10 @@ def main(args: argparse.Namespace):
         try:
             subg_fps = fileutil.get_files_from_dir(subgdir, "gfa")
         except FileNotFoundError:
-            parallel_hpbuilder(
+            build_in_parallel(
                 args.file, outdir, args
             )  # build Hierarchical Pangenome from one graph
             return
 
     # build Hierachical Pangenomes
-    parallel_hpbuilder(subg_fps, outdir, args)
+    build_in_parallel(subg_fps, outdir, args)

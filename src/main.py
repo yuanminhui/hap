@@ -2,7 +2,7 @@ import argparse
 import sys
 import importlib
 
-import palchinfo
+import hapinfo
 
 
 def create_parser():
@@ -10,21 +10,21 @@ def create_parser():
 
     module_help_map = {}
     parser = argparse.ArgumentParser(
-        prog=palchinfo.name,
-        description="Toolkit for Prowse data convertion.",
-        usage=f"{palchinfo.name} <command> [options]",
+        prog=hapinfo.name,
+        description="Hierarchical Pangenome toolkit.",
+        usage=f"{hapinfo.name} <command> [options]",
         exit_on_error=False,
     )
     parser.add_argument(
         "-v",
         "--version",
         action="version",
-        version=f"{palchinfo.name} {palchinfo.version}",
+        version=f"{hapinfo.name} {hapinfo.version}",
     )
     subparsers = parser.add_subparsers(
         title="commands", dest="command", required=True, metavar=""
     )
-    for module in palchinfo.modules:
+    for module in hapinfo.modules:
         importlib.import_module(f".{module}", "commands").register_command(
             subparsers, module_help_map
         )
@@ -45,7 +45,7 @@ def main():
             args.func(args)
     except (argparse.ArgumentError, SystemExit) as e:
         if len(sys.argv) == 2:
-            if sys.argv[1] in palchinfo.modules:
+            if sys.argv[1] in hapinfo.modules:
                 module_help_map[sys.argv[1]]()
             else:
                 parser.print_help(sys.stderr)
