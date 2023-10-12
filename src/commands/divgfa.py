@@ -4,7 +4,6 @@ import functools
 import multiprocessing as mp
 
 from lib import gfautil
-from lib import fileutil
 import palchinfo
 
 
@@ -27,20 +26,44 @@ def register_command(subparsers: argparse._SubParsersAction, module_help_map: di
     grp_io = psr_divgfa.add_argument_group("I/O options")
     grp_io.add_argument("-o", "--outdir", help="output directory")
 
+    # Parameters
+    grp_params = psr_divgfa.add_argument_group("Parameters")
+    grp_params.add_argument(
+        "-c",
+        "--contig",
+        action="store_true",
+        help="extract subgraph at contig level (default chromosome)",
+    )
+
 
 def main(args: argparse.Namespace):
     outdir = args.outdir if args.outdir else os.getcwd()
-    gfaver, gfamin, seqfp = gfautil.preprocess_gfa(args.file, outdir)
+    gfafp = os.path.normpath(args.file)
+    if not os.path.exists(gfafp):
+        raise FileNotFoundError(f"File {args.file} not found.")
+    outdir = os.path.normpath(outdir)
+    if not os.path.exists(outdir):
+        os.mkdir(outdir)
 
-    subgnames = gfautil.extract_subgraph_names(gfamin, gfaver)
+    gfagz = (
+        gfafp if gfafp.endswith(".gz") else gfautil.gzip_gfa(gfafp)
+    )  # temp gzipped GFA for process performance
+    gfaver = gfautil.get_gfa_version(gfagz)
+
+    subgnames = gfautil.extract_subgraph_names(
+        gfagz,
+        gfaver,
+        not args.contig,
+    )
 
     exsubg = functools.partial(
         gfautil.extract_subgraph,
-        gfa_path=gfamin,
+        gfa_path=gfagz,
         gfa_version=gfaver,
         outdir=outdir,
     )
     with mp.Pool() as pool:
         pool.map(exsubg, subgnames)
 
-    fileutil.remove_files([gfamin, seqfp])
+    if not gfafp.endswith(".gz"):
+        os.remove(gfagz)

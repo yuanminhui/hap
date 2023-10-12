@@ -15,6 +15,8 @@ from lib import fileutil
 from lib import typeutil
 import palchinfo
 
+# TODO: rewrite some DataFrame operations in a more efficient & elegant way
+
 
 class Segment:
     def __init__(self, id):
@@ -25,6 +27,7 @@ class Segment:
         self.level_range = [0, 0]
         self.length = 0
         self.rank = 0
+        self.frequency = 0
         self.sources = []
         self.dir_var = 0
         self.total_var = 0
@@ -44,6 +47,7 @@ class Region:
         self.level_range = [0, 0]
         self.length = 0
         self.is_default = False
+        self.sources = []
         self.is_var = True if type == "var" or type != "con" else False
         self.type = type
         self.total_var = 0
@@ -53,13 +57,15 @@ class Region:
         self.after = None
 
     def add_segment(self, id):
-        """Create and add segment to current region, setting the same level.
+        """Create and add segment to current region, setting the same `level_range`,
+        `sources`, and return the created segment.
         If region `type` is `con` and no segment exists, added segment is set
         to default."""
 
         segment = Segment(id)
         self.segments.append(segment.id)
         segment.level_range = self.level_range
+        segment.sources = self.sources
         return segment
 
     def to_dict(self):
@@ -87,13 +93,14 @@ def _get_id(type: str) -> str:
     return "_".join([prefix, str(_ids[type])])
 
 
-def graph2rstree(graph: ig.Graph) -> tuple[pd.DataFrame, pd.DataFrame]:
+def graph2rstree(graph: ig.Graph):
     """Build a region-segment tree for pangenome representation from a normalized sequence graph."""
 
     # Inits
     visited = set()
     pathstarts = collections.deque()
     paths = []
+    meta = {"sources": graph["haplotypes"].split(",")}
     rt = pd.DataFrame(
         columns=[
             "id",
@@ -104,6 +111,7 @@ def graph2rstree(graph: ig.Graph) -> tuple[pd.DataFrame, pd.DataFrame]:
             "level_range",
             "length",
             "is_default",
+            "sources",
             "is_var",
             "type",
             "total_var",
@@ -121,6 +129,7 @@ def graph2rstree(graph: ig.Graph) -> tuple[pd.DataFrame, pd.DataFrame]:
             "level_range",
             "length",
             "rank",
+            "frequency",
             "sources",
             "dir_var",
             "total_var",
@@ -147,15 +156,16 @@ def graph2rstree(graph: ig.Graph) -> tuple[pd.DataFrame, pd.DataFrame]:
 
             # build elements and fill properties
             region = Region(_get_id("r"), "con")
+            region.level_range = [level, level]
+            region.sources = copy.deepcopy(st.iat[pi, st.columns.get_loc("sources")])
             segment = region.add_segment(se["name"])
-            segment.level_range = region.level_range = [level, level]
             segment.length = se["length"]
+            segment.frequency = len(segment.sources) / len(meta["sources"])
             region.parent_seg = parseg_id
 
             # write to dataframe
             subrg = st.iat[pi, st.columns.get_loc("sub_regions")]
             subrg.append(region.id)
-            st.iat[pi, st.columns.get_loc("sub_regions")] = subrg
             st = pd.concat(
                 [st, pd.DataFrame([segment.to_dict()])], ignore_index=True, copy=False
             )
@@ -169,6 +179,7 @@ def graph2rstree(graph: ig.Graph) -> tuple[pd.DataFrame, pd.DataFrame]:
             "name": "string",
             "length": "uint64",
             "rank": "uint8",
+            "frequency": "float16",
             "dir_var": "uint8",
             "total_var": "uint64",
             "is_wrapper": "bool",
@@ -191,6 +202,51 @@ def graph2rstree(graph: ig.Graph) -> tuple[pd.DataFrame, pd.DataFrame]:
         },
         copy=False,
     )
+
+    # Fill dispensable properties for created elements
+
+    def fill_sources(group):
+        """Fill `frequency` & `sources` field for some created segments."""
+        rows = group["sources"].apply(len) == 0
+        if rows.any():
+            i = group.index[rows][0]
+            group.at[i, "sources"] = list(
+                set(group["sources_r"].iloc[0])
+                - set().union(*[x for x in group["sources"] if len(x) > 0])
+            )
+            group.at[i, "frequency"] = len(group.at[i, "sources"]) / len(
+                meta["sources"]
+            )
+        return group
+
+    exploded = st.merge(
+        rt.loc[:, ["id", "segments", "sources"]].explode("segments"),
+        left_on="id",
+        right_on="segments",
+        how="left",
+        suffixes=("", "_r"),
+    ).drop(
+        "segments", axis=1
+    )  # add region id for grouping
+    exploded = exploded.groupby("id_r", group_keys=False).apply(
+        fill_sources
+    )  # fill the blanks
+
+    exploded["rank"] = (
+        exploded.groupby("id_r")["frequency"]
+        .rank(
+            method="first", ascending=False
+        )  # TODO: adjust rank method to prefer insertion
+        .astype(int)
+        - 1
+    )  # calculate rank by ordering
+    st = exploded.drop(["id_r", "sources_r"], axis=1)
+
+    return rt, st, meta
+
+
+def calculate_properties_l2r(rt: pd.DataFrame, st: pd.DataFrame, meta: dict):
+    """Calculate properties of regions and segments from leaves to root. Some properties are essential that this function be called before other procedures."""
 
     # Fill other fields from leaves to root
     maxlevel = rt["level_range"].apply(lambda lr: lr[1]).max()
@@ -290,7 +346,7 @@ def graph2rstree(graph: ig.Graph) -> tuple[pd.DataFrame, pd.DataFrame]:
 
                 st.iloc[si] = segment
 
-    return rt, st
+    return rt, st, meta
 
 
 def unvisited_path(
@@ -331,12 +387,15 @@ def process_path(
     """Traverse and process an independant path."""
 
     g = graph
+    haps = g["haplotypes"].split(",")
 
     # Init the path based on traverse order
     # If is main path
     if g.vs[start]["name"] == "start":
         region = Region(_get_id("r"), "con")
+        region.sources = haps
         segment = Segment(_get_id("s"))
+        segment.is_wrapper = True
 
     # or side path
     else:
@@ -352,14 +411,17 @@ def process_path(
             pi = st[st["id"] == parseg_id].index[0]
             level = st.iat[pi, st.columns.get_loc("level_range")][0] + 1
             subrg = st.iat[pi, st.columns.get_loc("sub_regions")]
+            sources = copy.deepcopy(st.iat[pi, st.columns.get_loc("sources")])
 
             # Build elements and fill properties
             if g.vs[before]["name"] != "start":
                 # TODO: change to support consensus bead that contain more than one node
                 pre_region = Region(_get_id("r"), "con")
                 pre_region.level_range = [level, level]
+                pre_region.sources = sources
                 pre_seg = pre_region.add_segment(g.vs[before]["name"])
                 pre_seg.length = g.vs[before]["length"]
+                pre_seg.frequency = len(pre_seg.sources) / len(haps)
                 pre_region.parent_seg = parseg_id
                 # write to dataframe
                 st = pd.concat(
@@ -378,6 +440,7 @@ def process_path(
             segment.level_range = region.level_range = [level, level]
             g.vs[before]["parent_seg"] = None  # "before" can't be accessed anymore
             region.parent_seg = parseg_id
+            region.sources = sources
             region.before = g.vs[before]["name"]
             subrg.append(region.id)
             # suspend current region dumping (to df) for potential updates
@@ -414,6 +477,8 @@ def process_path(
                 raise SystemExit("Internal Error: unsolved graph structure.")
 
             d = g.add_vertex(_get_id("s"), length=0).index
+            g.vs[d]["sources"] = []
+            g.vs[d]["frequency"] = 0
             g.add_edges([(s, d), (d, node)])
             g.delete_edges((s, node))
             ni = pathstarts.index(node)
@@ -421,6 +486,9 @@ def process_path(
             pathstarts.remove(node)
         g.vs[node]["parent_seg"] = segment.id
         g.vs[node]["path"] = len(paths)
+        if g.vs[node]["name"] != "start" and g.vs[node]["name"] != "end":
+            segment.sources = list(set().union(segment.sources, g.vs[node]["sources"]))
+            segment.frequency = max(segment.frequency, g.vs[node]["frequency"])
         last = node
 
     # Rewrite properties if no `sub_regions` would be found
@@ -434,6 +502,7 @@ def process_path(
         g.vs[ni]["path"] = None
     else:
         paths.append(path)
+        segment.is_wrapper = True
     region.segments.append(segment.id)
     st = pd.concat(
         [st, pd.DataFrame([segment.to_dict()])], ignore_index=True, copy=False
@@ -462,6 +531,8 @@ def process_path(
             d = g.add_vertex(
                 _get_id("s"), length=0
             ).index  # NOTE: `d` node isn't added to origin path
+            g.vs[d]["sources"] = []
+            g.vs[d]["frequency"] = 0
             g.add_edges([(before, d), (d, af)])
             g.delete_edges((before, af))
             visited.add(d)
@@ -470,11 +541,17 @@ def process_path(
             org_ale_node = org_ale_path[0]
             ale_seg = Segment(g.vs[org_ale_node]["name"])
             ale_seg.length = g.vs[org_ale_node]["length"]
+            ale_seg.frequency = g.vs[org_ale_node]["frequency"]
+            ale_seg.sources = g.vs[org_ale_node]["sources"]
             g.vs[org_ale_node]["parent_seg"] = None
         else:
             ale_seg = Segment(_get_id("s"))
-            for v in org_ale_path:
-                g.vs[v]["parent_seg"] = ale_seg.id  # Update parent for separable nodes
+            ale_seg.is_wrapper = True
+            for n in org_ale_path:
+                g.vs[n]["parent_seg"] = ale_seg.id  # Update parent for separable nodes
+                ale_seg.sources = list(set().union(ale_seg.sources, g.vs[n]["sources"]))
+                ale_seg.frequency = max(ale_seg.frequency, g.vs[n]["frequency"])
+
         ale_seg.level_range = [level, level]
         region.segments.append(ale_seg.id)
         st = pd.concat(
@@ -487,7 +564,7 @@ def process_path(
     return rt, st
 
 
-def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, minres=0.04):
+def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, meta: dict, minres=0.04):
     """Wrap small regions, deepen the region-segment tree and establish hierarchy."""
 
     if minres <= 0:
@@ -498,7 +575,8 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, minres=0.04):
     maxlevel = math.ceil(
         math.log2(totallen / 1000 / minres)
     )  # new max level for hierarchical graph
-    meta = {"max_level": maxlevel, "total_length": int(totallen)}
+    meta["max_level"] = maxlevel
+    meta["total_length"] = int(totallen)
     minlenpx = 1 / minres
     # clear old level ranges
     mask = rt["level_range"].apply(lambda lr: lr[1] > 1)
@@ -583,13 +661,14 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, minres=0.04):
                         last = current
             r2bw_iranges.append(last)
 
+            si = st[st["id"] == region["parent_seg"]].index.to_list()[0]
+
             # move parent segment to current layer if all its child regions are wrapped into one
             if (
                 len(r2bw_iranges) == 1
                 and r2bw_iranges[0][0] == 0
                 and r2bw_iranges[0][1] == len(rid_list) - 1
             ):
-                si = st[st["id"] == region["parent_seg"]].index.to_list()[0]
                 lvlrg = st.iat[si, st.columns.get_loc("level_range")]
                 lvlrg[1] = i  # NOTE: update df cell in place
                 mask = rt["id"].isin(rid_list)
@@ -614,10 +693,17 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, minres=0.04):
                 # build wrapper elements and fill properties
                 wrap_region = Region(_get_id("r"), "con")
                 wrap_region.level_range = [i, i]
+                wrap_region.sources = copy.deepcopy(
+                    st.iat[si, st.columns.get_loc("sources")]
+                )
                 wrap_segment = wrap_region.add_segment(_get_id("s"))
                 wrap_region.length = (
                     wrap_region.min_length
                 ) = wrap_segment.length = totallen
+                wrap_segment.frequency = len(wrap_segment.sources) / len(
+                    meta["sources"]
+                )
+                wrap_segment.is_wrapper = True
                 wrap_segment.name = wrap_region.name = _get_id("con")
                 wrap_segment.dir_var = len(r2bw_df[r2bw_df["is_var"]])
                 wrap_segment.total_var = (
@@ -652,6 +738,7 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, minres=0.04):
                         "name": "string",
                         "length": "uint64",
                         "rank": "uint8",
+                        "frequency": "float16",
                         "dir_var": "uint8",
                         "total_var": "uint64",
                         "is_wrapper": "bool",
@@ -730,8 +817,8 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, minres=0.04):
     return rt, st, meta
 
 
-def calculate_properties(rt: pd.DataFrame, st: pd.DataFrame, meta: dict):
-    """Calculates the properties for elements in the region-segment tree."""
+def calculate_properties_r2l(rt: pd.DataFrame, st: pd.DataFrame, meta: dict):
+    """Calculates the properties for elements from root to leaves in the region-segment tree."""
 
     # from root to leave
     root_ri = rt[rt["parent_seg"].isna()].index.to_list()[0]
@@ -789,7 +876,7 @@ def calculate_properties(rt: pd.DataFrame, st: pd.DataFrame, meta: dict):
     return rt, st, meta
 
 
-def export_hp(
+def export(
     rt: pd.DataFrame,
     st: pd.DataFrame,
     meta: dict,
@@ -803,6 +890,7 @@ def export_hp(
             "name",
             "level_range",
             "length",
+            "sources",
             "is_var",
             "total_var",
             "min_length",
@@ -814,14 +902,39 @@ def export_hp(
     )
 
     if format == "st":
+        rt.rename(
+            columns={
+                "range": "region_range",
+                "type": "region_type",
+                "is_default": "region_is_default",
+            },
+            inplace=True,
+        )
         st = st.merge(
-            rt.explode("segments"), left_on="id", right_on="segments", how="left"
+            rt.loc[
+                :,
+                [
+                    "segments",
+                    "region_range",
+                    "parent_seg",
+                    "region_type",
+                    "region_is_default",
+                ],
+            ].explode("segments"),
+            left_on="id",
+            right_on="segments",
+            how="left",
+            suffixes=("", "_r"),
         ).drop("segments", axis=1)
+        st.to_csv(outfp_base + ".st.tsv", sep="\t", na_rep="*", index=False)
 
-        st.to_csv(outfp_base + ".st.tsv", sep="\t", na_rep="none", index=False)
+        meta["sources"] = ",".join(meta["sources"])
+        metasr = pd.Series(meta)
+        metasr.to_csv(outfp_base + ".meta.tsv", sep="\t", na_rep="*", header=False)
+
     elif format == "rst":
-        rt.to_csv(outfp_base + "_rt.tsv", sep="\t", na_rep="none", index=False)
-        st.to_csv(outfp_base + "_st.tsv", sep="\t", na_rep="none", index=False)
+        rt.to_csv(outfp_base + ".rt.tsv", sep="\t", na_rep="*", index=False)
+        st.to_csv(outfp_base + ".st.tsv", sep="\t", na_rep="*", index=False)
     else:
         raise ValueError("Unsupported output format.")
 
@@ -901,53 +1014,79 @@ def gfa2graph(filepath: str, gfa_version: float) -> ig.Graph:
     """Convert a (gzipped) GFA file to an igraph.Graph object."""
 
     # create temp files
-    nodefp, edgefp, edgetmp = fileutil.create_tmp_files(3)
+    infofp, nodefp, edgefp, edgetmp = fileutil.create_tmp_files(4)
+
+    # get awk scripts
+    awkfp_pps = os.path.join(palchinfo.srcpath, "lib", "parse_pansn_str.awk")
+    awkfp_g12c = os.path.join(palchinfo.srcpath, "lib", "gfa12csv.awk")
+    awkfp_g22c = os.path.join(palchinfo.srcpath, "lib", "gfa22csv.awk")
 
     zcat = ["zcat", filepath]
-    # `awk` -- convert the GFA format subgraph to CSV table of nodes and edges
-    awk = ["|", "awk"]
-    # TODO: calculate rank property
+    # `awk` -- convert the GFA format subgraph to CSV tables of nodes and edges, plus a info file
+    awk = [
+        "|",
+        "awk",
+        "-v",
+        f"infofp={infofp}",
+        "-v",
+        f"nodefp={nodefp}",
+        "-v",
+        f"edgefp={edgefp}",
+        "-f",
+        awkfp_pps,
+        "-f",
+    ]
     if gfa_version < 2:
-        awk.append(
-            f"""'BEGIN {{ OFS=","; print "start,0\\nend,0" > "{nodefp}"; print "source", "target" > "{edgefp}"}} /^S/ {{if (match($0, /LN:i:[0-9]+/)) {{s = substr($0, RSTART, RLENGTH); split(s, a, ":"); len = a[3]}} else len = -1; print $2, len >> "{nodefp}"}} /^L/ {{ print $2, $4 >> "{edgefp}" }} /^P/ {{split($3,a,","); nc = length(a); print "start", substr(a[1],1,length(a[1])-1) "\\n" substr(a[nc],1,length(a[nc]-1)), "end" >> "{edgefp}"}} /^W/ {{split($7,a,"[<>]"); nc = length(a); print "start", a[2] "\\n" a[nc], "end" >> "{edgefp}"}}'"""
-        )  # in GFA 1 there is a situation that lacks segment length, -1 is set here and pass to subsequent processing
+        awk.append(awkfp_g12c)
     else:  # GFA 2
-        awk.append(
-            f"""'BEGIN {{ OFS=","; print "start,0\\nend,0" > "{nodefp}"; print "source", "target" > "{edgefp}"}} /^S/ {{print $2, $3 >> "{nodefp}"}} /^E/ {{ print substr($3, 1, length($3) - 1), substr($4, 1, length($4) - 1) >> "{edgefp}" }} /^O/ {{split($3,a," "); nc = length(a); print "start", a[1] "\\n" a[nc], "end" >> "{edgefp}"}} /^U/ {{split($3,a," "); nc = length(a); print "start", substr(a[1],1,length(a[1])-1) "\\n" substr(a[nc],1,length(a[nc]-1)), "end" >> "{edgefp}"}}'"""
-        )
+        awk.append(awkfp_g22c)
+
+    locale = ["LC_ALL=C"]
 
     # `sort` & `join` -- remove edges with absent segment id
-    sort = ["sort", "-t", ",", "-k"]
+    sort = ["sort", "-t", r"$'\t'", "-k"]
     sort_n = sort + ["1,1", "-o", nodefp, nodefp]
     sort_e1 = sort + ["1,1", "-o", edgetmp, edgefp]
     sort_e2 = ["|"] + sort + ["2,2", "|"]
-    join = ["join", "-t", ","]
+    join = ["join", "-t", r"$'\t'"]
     join1 = join + ["-1", "1", "-2", "1", "-o", "2.1,2.2", nodefp, edgetmp]
     join2 = join + ["-1", "2", "-2", "1", "-o", "1.1,1.2", "-", nodefp, ">", edgefp]
 
     # `sed` -- add table headers
     sed = ["sed", "-i"]
-    sed_n = sed + [r"1i\name,length", nodefp]
-    sed_e = sed + [r"1i\source,target", edgefp]
+    sed_n = sed + [r"1i\name\tlength\tfrequency\tsources", nodefp]
+    sed_e = sed + [r"1i\source\ttarget", edgefp]
 
     cmd1 = zcat + awk
-    cmd2 = join1 + sort_e2 + join2
+    cmd2 = locale + join1 + sort_e2 + join2
     subprocess.run(" ".join(cmd1), shell=True)
-    subprocess.run(sort_n)
-    subprocess.run(sort_e1)
-    subprocess.run(" ".join(cmd2), shell=True)
+    subprocess.run(" ".join(locale + sort_n), shell=True, executable="/bin/bash")
+    subprocess.run(" ".join(locale + sort_e1), shell=True, executable="/bin/bash")
+    subprocess.run(" ".join(cmd2), shell=True, executable="/bin/bash")
     subprocess.run(sed_n)
     subprocess.run(sed_e)
 
     # convertions
-    nodedf = pd.read_csv(nodefp, dtype={"name": "str", "length": "int32"})
-    edgedf = pd.read_csv(edgefp, dtype={"source": "str", "target": "str"})
+    nodedf = pd.read_csv(
+        nodefp,
+        sep="\t",
+        dtype={"name": "str", "length": "int32", "frequency": "float32"},
+        converters={"sources": lambda s: s.split(",")},
+    )
+    edgedf = pd.read_csv(edgefp, sep="\t", dtype={"source": "str", "target": "str"})
+
     g = ig.Graph.DataFrame(edgedf, vertices=nodedf, use_vids=False)
     if not g.is_dag:
         raise ValueError("Cycle detected in graph, modify it into a DAG and re-run.")
 
+    # store metadata in graph attributes
+    infodf = pd.read_csv(infofp, sep="\t", header=None, names=["key", "value"])
+    infodict = infodf.set_index("key")["value"].to_dict()
+    for k, v in infodict.items():
+        g[k] = v
+
     # remove temp files
-    fileutil.remove_files([nodefp, edgefp, edgetmp])
+    fileutil.remove_files([infofp, nodefp, edgefp, edgetmp])
 
     return g
 
@@ -958,22 +1097,24 @@ def hpbuilder(
     """Build a Hierarchical Pangenome from a inseparable graph."""
 
     if not subg_name:
-        subg_name = os.path.basename(filepath).replace(".gfa.gz", "")
+        subg_name = os.path.basename(filepath).split(".", 1)[0]
     outfp_base = outdir + "/" + subg_name
 
     g = gfa2graph(filepath, gfa_version)
     rst = graph2rstree(g)
+    rst = calculate_properties_l2r(*rst)
 
     # if not args.no_wrap:
     rst = wrap_rstree(*rst, args.minres)
-    rst = calculate_properties(*rst)
+    rst = calculate_properties_r2l(*rst)
 
     # TODO: add export
+    export(*rst, outfp_base)
 
     # if args.split:
-    #     export_hp(*rst, outfp_base, "tsv")
+    #     export(*rst, outfp_base, "tsv")
     # else:
-    #     export_hp(*rst, outfp_base, "hp")
+    #     export(*rst, outfp_base, "hp")
 
 
 def parallel_hpbuilder(filepath: list[str] | str, outdir: str, args):
@@ -986,7 +1127,7 @@ def parallel_hpbuilder(filepath: list[str] | str, outdir: str, args):
     with mp.Pool() as pool:
         pp_res = pool.map(pp_gfa, filepath)
 
-    (gfavers, gfamins, seqfps) = zip(*pp_res)
+    gfavers, gfamins, seqfps = zip(*pp_res)
 
     sg_hpbd = functools.partial(
         hpbuilder,
@@ -994,7 +1135,7 @@ def parallel_hpbuilder(filepath: list[str] | str, outdir: str, args):
         args=args,
     )
     with mp.Pool() as pool:
-        pool.starmap(sg_hpbd, zip(gfavers, gfamins))
+        pool.starmap(sg_hpbd, zip(gfamins, gfavers))
         pool.map_async(os.remove, gfamins)
 
     return list(seqfps)  # TODO: decide what to return
@@ -1032,12 +1173,24 @@ def main(args: argparse.Namespace):
                 else:
                     ctn = input("Please enter 'y' or 'n'. ")
         os.mkdir(subgdir)
-        subprocess.run([palchinfo.name, "divgfa", args.file, "-o", subgdir])
+        subprocess.run(
+            [
+                "python3",
+                f"{palchinfo.srcpath}/main.py",
+                "divgfa",
+                args.file,
+                "-o",
+                subgdir,
+            ]
+        )
 
-        subg_fps = fileutil.get_files_from_dir(subgdir, "gfa")
+        try:
+            subg_fps = fileutil.get_files_from_dir(subgdir, "gfa")
+        except FileNotFoundError:
+            parallel_hpbuilder(
+                args.file, outdir, args
+            )  # build Hierarchical Pangenome from one graph
+            return
 
     # build Hierachical Pangenomes
-    if len(subg_fps) == 0:
-        parallel_hpbuilder(args.file, outdir, args)
-    else:
-        parallel_hpbuilder(subg_fps, outdir, args)
+    parallel_hpbuilder(subg_fps, outdir, args)

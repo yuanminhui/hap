@@ -1,6 +1,8 @@
 import os
 import subprocess
 
+import palchinfo
+
 
 def gzip_gfa(filepath: str):
     """Gzip a GFA file and return the compressed file path."""
@@ -43,17 +45,22 @@ def get_gfa_version(filepath: str) -> float:
             "1",
             "-o",
             "-E",
-            "^(E|J|W)",
+            "'^(E|J|W)'",
         ]
-        char = subprocess.check_output(" ".join(cmd_ec), shell=True, text=True)
-        if char == "E":
-            ver = 2.0
-        elif char == "J":
-            ver = 1.2
-        elif char == "W":
-            ver = 1.1
-        else:
+        res = subprocess.run(
+            " ".join(cmd_ec), shell=True, text=True, capture_output=True
+        )
+        if res.returncode == 0:
+            char = res.stdout
+            if char == "E":
+                ver = 2.0
+            elif char == "J":
+                ver = 1.2
+            elif char == "W":
+                ver = 1.1
+        elif res.returncode == 1:
             ver = 1.0
+
     finally:
         return ver
 
@@ -104,6 +111,9 @@ def extract_subgraph_names(
     naming convention is required for extracting segment name from ids in `P` or
     `O|U` lines."""
 
+    # get awk scripts
+    awkfp_pps = os.path.join(palchinfo.srcpath, "lib", "parse_pansn_str.awk")
+
     locale = ["LC_ALL=C"]
     zcat = [
         "zcat",
@@ -113,18 +123,21 @@ def extract_subgraph_names(
     awk = [
         "|",
         "awk",
+        "-f",
+        awkfp_pps,
+        "-e",
     ]
     # `grep1` -- get records containing subgraph names
     # `awk` -- extract subgraph names
     if gfa_version < 1.1:
         grep1 = grep + ["^P"]
         awk.append(
-            r"""'{if (sep=="") {split(" 0,0\\.0;0:0/0\\|0#0_0\\-", seps, "0"); for (i in seps) {sep = seps[i]; c = gsub(sep,sep,$2); if (c==2) break} if (c!=2) exit} {split($2,a,sep); if (length(a)<3) next; else print a[3]}}'"""
+            """'{res = parse_pansn_str($2, pa); if (delim == "") exit; if (!res) next; else print pa[3]}'"""
         )
     elif gfa_version >= 2.0:
         grep1 = grep + ["-E", "^(O|U)"]
         awk.append(
-            r"""'{if (sep=="") {split(" 0,0\\.0;0:0/0\\|0#0_0\\-", seps, "0"); for (i in seps) {sep = seps[i]; c = gsub(sep,sep,$2); if (c==2) break} if (c!=2) exit} {split($2,a,sep); if (length(a)<3) next; else print a[3]}}'"""
+            """'{res = parse_pansn_str($2, pa); if (delim == "") exit; if (!res) next; else print pa[3]}'"""
         )
     else:
         grep1 = grep + ["^W"]
@@ -137,7 +150,11 @@ def extract_subgraph_names(
         grep2 = grep + ["-i", "^chr"]
         cmd += grep2
 
-    return subprocess.check_output(" ".join(cmd), shell=True, text=True).splitlines()
+    res = subprocess.run(" ".join(cmd), shell=True, text=True, capture_output=True)
+    if res.returncode == 0:
+        return res.stdout.splitlines()
+    elif res.returncode == 1:
+        return []
 
 
 def extract_subgraph(name: str, gfa_path: str, gfa_version: float, outdir: str):
@@ -150,6 +167,7 @@ def extract_subgraph(name: str, gfa_path: str, gfa_version: float, outdir: str):
     awk = ["|", "awk"]
     # `zgrep1` -- get records that contain set of nodes from the whole graph by subgraph name
     # `awk` -- extract node ids from set records
+    # TODO: extract more information in origin GFA such as H line
     if gfa_version < 2:
         if gfa_version == 1.0:
             zgrep1 = zgrep + [f"^P.*{name}"]

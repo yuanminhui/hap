@@ -10,9 +10,9 @@
 
 
 # Extract subgraph names
-# v1
-'{if (sep=="") {split(" 0,0\\.0;0:0/0\\|0#0_0\\-", seps, "0"); for (i in seps) {sep = seps[i]; c = gsub(sep,sep,$2); if (c==2) break} if (c!=2) exit} {split($2,a,sep); if (length(a)<3) next; else print a[3]}}'
-# v2
+# v1.0 / v2.0
+'{res = parse_pansn_str($2, pa); if (delim == "") exit; if (!res) next; else print pa[3]}'
+# v1.1
 '{print $4}'
 
 
@@ -23,10 +23,3 @@
 '/^W/ {split($7,a,"[<>]"); for (i=2;i in a;i++) print a[i]}'
 # v2.0
 '/^O/ {split($3,a," "); for (i in a) print a[i]} /^U/ {split($3,a," "); for (i in a) print substr(a[i], 1, length(a[i]) - 1)}'
-
-
-# Convert GFA to CSV
-# v1
-'BEGIN { OFS=","; print "start,0\nend,0" > "nodes.csv"; print "source", "target" > "edges.csv"} /^S/ {if (match($0, /LN:i:[0-9]+/)) {s = substr($0, RSTART, RLENGTH); split(s, a, ":"); len = a[3]} else len = -1; print $2, len >> "nodes.csv"} /^L/ { print $2, $4 >> "edges.csv" } /^P/ {split($3,a,","); nc = length(a); print "start", substr(a[1],1,length(a[1])-1) "\n" substr(a[nc],1,length(a[nc]-1)), "end" >> "edges.csv"} /^W/ {split($7,a,"[<>]"); nc = length(a); print "start", a[2] "\n" a[nc], "end" >> "edges.csv"}'
-# v2
-'BEGIN { OFS=","; print "start,0\nend,0" > "nodes.csv"; print "source", "target" > "edges.csv"} /^S/ {print $2, $3 >> "nodes.csv"} /^E/ { print substr($3, 1, length($3) - 1), substr($4, 1, length($4) - 1) >> "edges.csv" } /^O/ {split($3,a," "); nc = length(a); print "start", a[1] "\n" a[nc], "end" >> "edges.csv"} /^U/ {split($3,a," "); nc = length(a); print "start", substr(a[1],1,length(a[1])-1) "\n" substr(a[nc],1,length(a[nc]-1)), "end" >> "edges.csv"}'
