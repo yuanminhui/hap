@@ -1,7 +1,7 @@
 import os
 import subprocess
 
-import palchinfo
+import hapinfo
 
 
 def gzip_gfa(filepath: str):
@@ -112,7 +112,7 @@ def extract_subgraph_names(
     `O|U` lines."""
 
     # get awk scripts
-    awkfp_pps = os.path.join(palchinfo.srcpath, "lib", "parse_pansn_str.awk")
+    awkfp_pps = os.path.join(hapinfo.srcpath, "lib", "parse_pansn_str.awk")
 
     locale = ["LC_ALL=C"]
     zcat = [
