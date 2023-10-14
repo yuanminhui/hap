@@ -2,7 +2,7 @@ import argparse
 import sys
 import importlib
 
-import hapinfo
+from hap import hapinfo
 
 
 def create_parser():
@@ -25,7 +25,7 @@ def create_parser():
         title="commands", dest="command", required=True, metavar=""
     )
     for module in hapinfo.modules:
-        importlib.import_module(f".{module}", "commands").register_command(
+        importlib.import_module(f".{module}", "hap.commands").register_command(
             subparsers, module_help_map
         )
 
@@ -49,8 +49,6 @@ def main():
                 module_help_map[sys.argv[1]]()
             else:
                 parser.print_help(sys.stderr)
-        else:
-            print(e)
         sys.exit(1)
 
 

@@ -10,10 +10,10 @@ import igraph as ig
 import pandas as pd
 import multiprocessing as mp
 
-from lib import gfautil
-from lib import fileutil
-from lib import typeutil
-import hapinfo
+from hap.lib import gfautil
+from hap.lib import fileutil
+from hap.lib import typeutil
+from hap import hapinfo
 
 # TODO: rewrite some DataFrame operations in a more efficient & elegant way
 

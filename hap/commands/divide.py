@@ -3,8 +3,8 @@ import argparse
 import functools
 import multiprocessing as mp
 
-from lib import gfautil
-import hapinfo
+from hap.lib import gfautil
+from hap import hapinfo
 
 
 _PROG = "divide"

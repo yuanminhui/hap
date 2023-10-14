@@ -1,7 +1,7 @@
 import os
 import subprocess
 
-import hapinfo
+from hap import hapinfo
 
 
 def gzip_gfa(filepath: str):

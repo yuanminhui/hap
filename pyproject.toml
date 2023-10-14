@@ -23,13 +23,13 @@ exclude = ["data", "tests"]
 
 
 [tool.poetry.dependencies]
-python = ">=3.8"
+python = ">=3.9,<3.13"
 pandas = "^2.1.1"
 igraph = "^0.11.2"
 
 
 [tool.poetry.scripts]
-hap = "main:main"
+hap = "hap.main:main"
 
 
 [tool.poetry.urls]
