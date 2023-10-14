@@ -1,30 +1,36 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
 
 
-[project]
+[tool.poetry]
 name = "hap"
 version = "0.1.0"
-authors = [
-  { name="yuanminhui", email="inmoinu@gmail.com" },
-]
 description = "Hierarchical Pangenome toolkit"
 keywords = ["hierarchical pangenome", "prowse", "pangenome", "bioinfomatics", "genomics", "data"]
+authors = ["yuanminhui <inmoinu@gmail.com>"]
+maintainers = ["yuanminhui <inmoinu@gmail.com>"]
+license = "MIT"
 readme = "README.md"
-requires-python = ">=3.8"
+repository = "https://github.com/yuanminhui/hap"
+documentation = "https://github.com/yuanminhui/hap/wiki"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3",
     "Operating System :: POSIX :: Linux",
 ]
-dependencies = [
-    "igraph",
-    "pandas",
-]
+exclude = ["data", "tests"]
 
-[project.scripts]
+
+[tool.poetry.dependencies]
+python = ">=3.8"
+pandas = "^2.1.1"
+igraph = "^0.11.2"
+
+
+[tool.poetry.scripts]
 hap = "main:main"
 
-[project.urls]
-"Repository" = "https://github.com/yuanminhui/hap.git"
+
+[tool.poetry.urls]
+"Bug Tracker" = "https://github.com/yuanminhui/hap/issues"
