@@ -90,7 +90,7 @@ _ids = {
 def _get_id(type: str) -> str:
     _ids[type] += 1
     prefix = type if type == "s" or type == "r" else type.upper()
-    return "_".join([prefix, str(_ids[type])])
+    return "-".join([prefix, str(_ids[type])])
 
 
 def graph2rstree(graph: ig.Graph):
@@ -287,8 +287,8 @@ def calculate_properties_l2r(rt: pd.DataFrame, st: pd.DataFrame, meta: dict):
                         rn = _get_id("ale")
                     rt.iat[ri, rt.columns.get_loc("name")] = rn
                     st.iloc[sis, st.columns.get_loc("name")] = [
-                        rn + "_" + chr(j) for j in range(97, 97 + len(sis))
-                    ]  # generate names like `ALE_{n}_a,b,c`
+                        rn + "-" + chr(j) for j in range(97, 97 + len(sis))
+                    ]  # generate names like `ALE-{n}-a,b,c`
 
                 # del exists
                 elif minlen == 0 or (minlen < 10 and d / minlen > 5):
@@ -303,14 +303,14 @@ def calculate_properties_l2r(rt: pd.DataFrame, st: pd.DataFrame, meta: dict):
                         rn = _get_id("ind")
                     rt.iat[ri, rt.columns.get_loc("name")] = rn
                     mini = lensr.idxmin()
-                    st.iat[mini, st.columns.get_loc("name")] = rn + "_d"
+                    st.iat[mini, st.columns.get_loc("name")] = rn + "-d"
                     sis.remove(mini)
                     if len(sis) > 1:
                         st.iloc[sis, st.columns.get_loc("name")] = [
-                            rn + "_i" + chr(j) for j in range(97, 97 + len(sis))
+                            rn + "-i" + chr(j) for j in range(97, 97 + len(sis))
                         ]
                     else:
-                        st.iloc[sis, st.columns.get_loc("name")] = rn + "_i"
+                        st.iloc[sis, st.columns.get_loc("name")] = rn + "-i"
 
                 # not determined
                 else:
@@ -318,7 +318,7 @@ def calculate_properties_l2r(rt: pd.DataFrame, st: pd.DataFrame, meta: dict):
                     rn = _get_id("var")
                     rt.iat[ri, rt.columns.get_loc("name")] = rn
                     st.iloc[sis, st.columns.get_loc("name")] = [
-                        rn + "_" + chr(j) for j in range(97, 97 + len(sis))
+                        rn + "-" + chr(j) for j in range(97, 97 + len(sis))
                     ]
 
             # consensus
@@ -957,8 +957,8 @@ def union(
             pool.map(
                 cat,
                 [
-                    f"cat {indir}/*_rt.tsv > {outdir}/{pgname}_rt.tsv",
-                    f"cat {indir}/*_st.tsv > {outdir}/{pgname}_st.tsv",
+                    f"cat {indir}/*.rt.tsv > {outdir}/{pgname}.rt.tsv",
+                    f"cat {indir}/*.st.tsv > {outdir}/{pgname}.st.tsv",
                 ],
             )
     else:
@@ -1150,10 +1150,10 @@ def main(args: argparse.Namespace):
         pgname = typeutil.remove_suffix_containing(os.path.basename(args.file), ".gfa")
 
         # divide into subgraphs
-        subgdir = f"{outdir}/{pgname}_subgraph"
+        subgdir = f"{outdir}/{pgname}-subgraph"
         if os.path.exists(subgdir):
             ctn = input(
-                f"There is a directory '{pgname}_subgraph' in the output directory, continuing the program will erase files in it. Continue? (y/n) "
+                f"There is a directory '{pgname}-subgraph' in the output directory, continuing the program will erase files in it. Continue? (y/n) "
             )
             invalid = True
             while invalid:
