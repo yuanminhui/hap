@@ -68,16 +68,17 @@ def register_command(subparsers: argparse._SubParsersAction, module_help_map: di
         prog=f"{hapinfo.name} {_PROG}",
         description="Submit Hierarchical Pangenomes to designated database.",
         help="submit hierarchical pangenomes to database",
+        epilog="If a DB connection string is specified along with the DB parameters, those parameters will be ignored. If no DB parameters provided, environment variable or config file will be utilized.",
     )
     psr_submit.set_defaults(func=main)
     module_help_map[_PROG] = psr_submit.print_help
 
-    psr_submit.add_argument("db", help="database connection string")
-
     # I/O options
     grp_io = psr_submit.add_argument_group("I/O options")
     grp_input = grp_io.add_mutually_exclusive_group(required=True)
-    grp_input.add_argument("name", nargs="+", help="hierarchical pangenome name")
+    grp_input.add_argument(
+        "-n", "--name", nargs="+", help="Hierarchical Pangenome name"
+    )
     grp_input.add_argument(
         "-d",
         "--dir",
@@ -85,18 +86,40 @@ def register_command(subparsers: argparse._SubParsersAction, module_help_map: di
         help="use directorys as input",
     )
 
-    # # Parameters
-    # grp_params = psr_submit.add_argument_group("Parameters")
-    # grp_params.add_argument(
-    #     "-c",
-    #     "--contig",
-    #     action="store_true",
-    #     help="extract subgraph at contig level (default chromosome)",
-    # )
+    # DB parameters
+    grp_db_params = psr_submit.add_argument_group("DB parameters")
+    grp_db_params.add_argument(
+        "-o",
+        "--host",
+        help="host name or IP address of the DB server",
+    )
+    grp_db_params.add_argument(
+        "-p", "--port", help="port of the DB server", default=5432
+    )
+    grp_db_params.add_argument(
+        "-u",
+        "--user",
+        help="user name to connect to the DB server",
+    )
+    grp_db_params.add_argument(
+        "-w",
+        "--password",
+        help="password to connect to the DB server",
+    )
+    grp_db_params.add_argument(
+        "-b",
+        "--db",
+        help="database name to connect",
+    )
+    grp_db_params.add_argument(
+        "-s",
+        "--db-str",
+        help="database connection string",
+    )
 
 
 def main(args: argparse.Namespace):
-    dbstr = args.db if args.db else os.environ["HAP_DB"]
+    dbstr = args.db_str if args.db_str else os.environ["HAP_DB"]
     # dbstr = os.path.normpath(dbstr)
     # if not os.path.exists(dbstr):
     #     os.mkdir(dbstr)
