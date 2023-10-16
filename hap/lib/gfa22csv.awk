@@ -21,7 +21,7 @@ BEGIN {
     print source, target >> edgefp;
 }
 
-/^U/ { 
+/^O/ { 
     split($3, a, " ")
 
     # link tip nodes
@@ -44,12 +44,12 @@ BEGIN {
         }   # NOTE: simply add on, may contain duplicates
     }
     if (!(n in haps)) {
-        haps[n] = 1
+        haps[n]
         hapcount++
     }   # non-duplicate haplotype names
 }
 
-/^O/ { 
+/^U/ { 
     split($3, a, " ")
 
     # link tip nodes
@@ -64,7 +64,7 @@ BEGIN {
     }
     n = pa[1] "." pa[2]
     for (i in a) {
-        sid = substr(a[i], 1, length(a[i]) - 1)
+        sid = a[i]
         if (sid in harr) {
             harr[sid] = harr[sid] "," n
         } else {
@@ -72,7 +72,7 @@ BEGIN {
         }
     }
     if (!(n in haps)) {
-        haps[n] = 1
+        haps[n]
         hapcount++
     }
 }

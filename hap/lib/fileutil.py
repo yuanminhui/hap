@@ -1,6 +1,7 @@
 import os
 import glob
 import tempfile
+import gzip
 
 
 def get_files_from_dir(dirpath: str, extension: str = None):
@@ -38,3 +39,31 @@ def create_tmp_files(num: int) -> list[str]:
         os.close(fd)
 
     return tmpfps
+
+
+def gzip_file(filepath: str):
+    """Gzip a file and return the compressed file path."""
+
+    if filepath.endswith(".gz"):
+        print(f"{filepath} is already gzipped.")
+        return filepath
+
+    outfp = filepath + ".gz"
+    with open(filepath, "r") as fin, gzip.open(outfp, "wt") as fout:
+        fout.writelines(fin)
+
+    return outfp
+
+
+def ungzip_file(filepath: str):
+    """Ungzip a file and return the decompressed file path."""
+
+    if not filepath.endswith(".gz"):
+        print(f"{filepath} is not gzipped.")
+        return filepath
+
+    outfp = filepath.replace(".gz", "")
+    with gzip.open(filepath, "rt") as fin, open(outfp, "w") as fout:
+        fout.writelines(fin)
+
+    return outfp

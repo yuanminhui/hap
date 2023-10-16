@@ -2,30 +2,19 @@ import os
 import subprocess
 
 from hap import hapinfo
-
-
-def gzip_gfa(filepath: str):
-    """Gzip a GFA file and return the compressed file path."""
-
-    outfp = filepath + ".gz"
-    with open(outfp, "w") as file:
-        subprocess.run(["gzip", "-c", filepath], stdout=file)
-
-    return outfp
+from hap.lib import fileutil
 
 
 def get_gfa_version(filepath: str) -> float:
-    """Get the version of a (gzipped) GFA file. When no `VN` tag in `H` line is
+    """Get the version of a GFA file. When no `VN` tag in `H` line is
     provided, an examination will run."""
 
     # a quick scan on version record
     cmd_rv = [
-        "zcat",
-        filepath,
-        "|",
         "head",
         "-n",
         "1",
+        filepath,
         "|",
         "awk",
         """'$1 == "H" {for (i = 2; i <= NF; ++i) if ($i ~ /^VN:/) {split($i, a, ":"); print a[3]}}'""",
@@ -37,15 +26,13 @@ def get_gfa_version(filepath: str) -> float:
         # examine the essential charistics a version has
         cmd_ec = [
             "LC_ALL=C",
-            "zcat",
-            filepath,
-            "|",
             "grep",
             "-m",
             "1",
             "-o",
             "-E",
             "'^(E|J|W)'",
+            filepath,
         ]
         res = subprocess.run(
             " ".join(cmd_ec), shell=True, text=True, capture_output=True
@@ -66,39 +53,30 @@ def get_gfa_version(filepath: str) -> float:
 
 
 def move_sequence(filepath: str, gfa_version: float, seqfp: str = None):
-    """Move the sequences in a (gzipped) GFA file to `seqfp`, leaving
+    """Move the sequences in a GFA file to (gzipped) `seqfp`, leaving
     a `*` as placeholder, add `LN` tag if not exist, and return the file path of
     the modified GFA file."""
 
-    outfp_base = filepath.replace(".gfa.gz", "")
+    outfp_base = filepath.replace(".gfa", "")
     if not seqfp:
         seqfp = outfp_base + ".seq.gz"
-    outfp = outfp_base + ".min.gfa.gz"
+    outfp = outfp_base + ".min.gfa"
     if os.path.exists(seqfp):
         os.remove(seqfp)
 
-    zcat = [
-        "zcat",
-        filepath,
-    ]
     # `awk` -- move sequences and calculate segment length
-    awk = ["|", "awk"]
-    gzip = [
-        "|",
-        "gzip",
-    ]
+    awk = ["awk"]
     if gfa_version < 2:
         awk.append(
-            f"""'BEGIN {{OFS="\\t"}} /^S/ {{if ($3 != "*") {{cmd = "gzip >> {seqfp}"; print $2, $3 | cmd; close(cmd); len = length($3); $3 = "*"; if (!match($0, /LN:/)) $0 = $0 "\tLN:i:" len}}}} {{print}}'"""
+            f"""'BEGIN {{cmd = "gzip >> {seqfp}"; OFS="\\t"}} /^S/ {{if ($3 != "*") {{print $2, $3 | cmd; len = length($3); $3 = "*"; if (!match($0, /LN:/)) $0 = $0 "\tLN:i:" len}}}} {{print}} END {{close(cmd)}}'"""
         )
     else:  # GFA 2
         awk.append(
-            f"""'BEGIN {{OFS="\\t"}} /^S/ {{if ($4 != "*") {{cmd = "gzip >> {seqfp}"; print $2, $4 | cmd; close(cmd); $4 = "*"}}}} {{print}}'"""
+            f"""'BEGIN {{cmd = "gzip >> {seqfp}"; OFS="\\t"}} /^S/ {{if ($4 != "*") {{print $2, $4 | cmd; $4 = "*"}}}} {{print}} END {{close(cmd)}}'"""
         )
+    awk.extend([filepath, ">", outfp])
 
-    cmd = zcat + awk + gzip
-    with open(outfp, "w") as file:
-        subprocess.run(" ".join(cmd), shell=True, stdout=file)
+    subprocess.run(" ".join(awk), shell=True)
 
     return outfp
 
@@ -106,7 +84,7 @@ def move_sequence(filepath: str, gfa_version: float, seqfp: str = None):
 def extract_subgraph_names(
     filepath: str, gfa_version: float, chr_only: bool = True
 ) -> list[str]:
-    """Extract the names of subgraphs from a (gzipped) GFA file. Segment names
+    """Extract the names of subgraphs from a GFA file. Segment names
     in `W` lines are treated as subgraph names. When no `W` line exists, `PanSN`
     naming convention is required for extracting segment name from ids in `P` or
     `O|U` lines."""
@@ -115,11 +93,7 @@ def extract_subgraph_names(
     awkfp_pps = os.path.join(hapinfo.srcpath, "lib", "parse_pansn_str.awk")
 
     locale = ["LC_ALL=C"]
-    zcat = [
-        "zcat",
-        filepath,
-    ]
-    grep = ["|", "grep"]
+    grep = ["grep"]
     awk = [
         "|",
         "awk",
@@ -144,10 +118,10 @@ def extract_subgraph_names(
         awk.append("'{print $4}'")
     sort = ["|", "sort", "-u"]
 
-    cmd = locale + zcat + grep1 + awk + sort
+    cmd = locale + grep1 + [filepath] + awk + sort
     # filter out non-chromosome level subgraphs
     if chr_only:
-        grep2 = grep + ["-i", "^chr"]
+        grep2 = ["|"] + grep + ["-E", "'^chr[[:digit:]]{0,2}[[:alpha:]]{0,1}$'"]
         cmd += grep2
 
     res = subprocess.run(" ".join(cmd), shell=True, text=True, capture_output=True)
@@ -158,42 +132,39 @@ def extract_subgraph_names(
 
 
 def extract_subgraph(name: str, gfa_path: str, gfa_version: float, outdir: str):
-    """Extract a subgraph by name from a (gzipped) GFA file, returning the sub-GFA's file path."""
+    """Extract a subgraph by name from a GFA file, returning the sub-GFA's file path."""
 
-    outfp = outdir + "/" + name + ".gfa.gz"
+    outfp = outdir + "/" + name + ".gfa"
 
-    locale = ["LC_ALL=C"]
-    zgrep = ["zgrep", "-E"]
-    awk = ["|", "awk"]
-    # `zgrep1` -- get records that contain set of nodes from the whole graph by subgraph name
-    # `awk` -- extract node ids from set records
-    # TODO: extract more information in origin GFA such as H line
+    # create temp files
+    setfp, mainfp = fileutil.create_tmp_files(2)
+
+    # get awk scripts
+    awkfp_es1 = os.path.join(hapinfo.srcpath, "lib", "extract_subg1.awk")
+    awkfp_es2 = os.path.join(hapinfo.srcpath, "lib", "extract_subg2.awk")
+
+    # `grep` -- get records that contain set of nodes from the whole graph by subgraph name
+    # `awk` -- extract node ids from set records, find related records by them
+    grep = ["LC_ALL=C", "grep", "-E"]
+    awk = ["awk", "-f"]
     if gfa_version < 2:
-        if gfa_version == 1.0:
-            zgrep1 = zgrep + [f"^P.*{name}"]
-            awk.append(
-                """'/^P/ {split($3,a,","); for (i in a) print substr(a[i], 1, length(a[i]) - 1)}'"""
-            )
-        elif gfa_version == 1.1:
-            zgrep1 = zgrep + [f"^W.*{name}"]
-            awk.append(
-                """'/^W/ {split($7,a,"[<>]"); for (i=2;i in a;i++) print a[i]}'"""
-            )
+        grep.append(f"'^(P|W).*{name}'")
+        awk.append(awkfp_es1)
     else:  # GFA 2
-        zgrep1 = zgrep + [f"^(O|U).*{name}"]
-        awk.append(
-            """'/^O/ {split($3,a," "); for (i in a) print a[i]} /^U/ {split($3,a," "); for (i in a) print substr(a[i], 1, length(a[i]) - 1)}'"""
-        )
-    zgrep1.append(gfa_path)
-    # `tee` -- save set records to subgraph
-    tee = ["|", "tee", f">(gzip > {outfp})"]
-    # `sed` & `zgrep2` -- get related records from the whole graph by segment id
-    sed = ["|", "sed", r"'s/^/\t/;s/$/[+-]?\t/'", "|"]
-    zgrep2 = zgrep + ["-f", "-", gfa_path]
-    gzip = ["|", "gzip", ">>", outfp]
+        grep.append(f"'^(O|U).*{name}'")
+        awk.append(awkfp_es2)
+    grep.extend([gfa_path, ">", setfp])
+    awk.extend([setfp, gfa_path, ">", mainfp])
 
-    cmd = locale + zgrep1 + tee + awk + sed + zgrep2 + gzip
-    subprocess.run(" ".join(cmd), shell=True, executable="/bin/bash")
+    # `cat` -- concatenate main records with set records
+    cat = ["cat", mainfp, setfp, ">", outfp]
+
+    subprocess.run(" ".join(grep), shell=True)
+    subprocess.run(" ".join(awk), shell=True)
+    subprocess.run(" ".join(cat), shell=True)
+
+    # remove temp files
+    fileutil.remove_files([mainfp, setfp])
 
     return outfp
 
@@ -208,15 +179,14 @@ def preprocess_gfa(filepath: str, outdir: str):
     if not os.path.exists(outdir):
         os.mkdir(outdir)
 
-    gfagz = (
-        gfafp if gfafp.endswith(".gz") else gzip_gfa(gfafp)
-    )  # temp gzipped GFA for process performance
-    seqfp = outdir + "/" + os.path.basename(gfagz).replace(".gfa.", ".seq.")
+    if filepath.endswith(".gz"):
+        gfafp = fileutil.ungzip_file(gfafp)  # temp ungzipped GFA
+    seqfp = outdir + "/" + os.path.basename(gfafp).replace(".gfa", ".seq.gz")
 
-    gfaver = get_gfa_version(gfagz)
-    gfamin = move_sequence(gfagz, gfaver, seqfp)
+    gfaver = get_gfa_version(gfafp)
+    gfamin = move_sequence(gfafp, gfaver, seqfp)
 
-    if not gfafp.endswith(".gz"):
-        os.remove(gfagz)
+    if filepath.endswith(".gz"):
+        os.remove(gfafp)
 
     return gfaver, gfamin, seqfp

@@ -3,7 +3,7 @@ import argparse
 import functools
 import multiprocessing as mp
 
-from hap.lib import gfautil
+from hap.lib import fileutil, gfautil
 from hap import hapinfo
 
 
@@ -45,25 +45,24 @@ def main(args: argparse.Namespace):
     if not os.path.exists(outdir):
         os.mkdir(outdir)
 
-    gfagz = (
-        gfafp if gfafp.endswith(".gz") else gfautil.gzip_gfa(gfafp)
-    )  # temp gzipped GFA for process performance
-    gfaver = gfautil.get_gfa_version(gfagz)
+    if args.file.endswith(".gz"):
+        gfafp = fileutil.ungzip_file(gfafp)  # temp ungzipped GFA
+    gfaver = gfautil.get_gfa_version(gfafp)
 
     subgnames = gfautil.extract_subgraph_names(
-        gfagz,
+        gfafp,
         gfaver,
         not args.contig,
     )
 
     exsubg = functools.partial(
         gfautil.extract_subgraph,
-        gfa_path=gfagz,
+        gfa_path=gfafp,
         gfa_version=gfaver,
         outdir=outdir,
     )
     with mp.Pool() as pool:
         pool.map(exsubg, subgnames)
 
-    if not gfafp.endswith(".gz"):
-        os.remove(gfagz)
+    if args.file.endswith(".gz"):
+        os.remove(gfafp)

@@ -49,7 +49,7 @@ BEGIN {
         }   # NOTE: simply add on, may contain duplicates
     }
     if (!(n in haps)) {
-        haps[n] = 1
+        haps[n]
         hapcount++
     }   # non-duplicate haplotype names
 }
@@ -72,7 +72,7 @@ BEGIN {
         }
     }
     if (!(n in haps)) {
-        haps[n] = 1
+        haps[n]
         hapcount++
     }
 }

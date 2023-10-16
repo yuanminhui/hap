@@ -43,7 +43,7 @@ def main():
         args = parser.parse_args()
         if hasattr(args, "func"):
             args.func(args)
-    except (argparse.ArgumentError, SystemExit) as e:
+    except (argparse.ArgumentError, SystemExit):
         if len(sys.argv) == 2:
             if sys.argv[1] in hapinfo.modules:
                 module_help_map[sys.argv[1]]()

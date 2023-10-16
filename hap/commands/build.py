@@ -1011,7 +1011,7 @@ def register_command(subparsers: argparse._SubParsersAction, module_help_map: di
 
 
 def gfa2graph(filepath: str, gfa_version: float) -> ig.Graph:
-    """Convert a (gzipped) GFA file to an igraph.Graph object."""
+    """Convert a GFA file to an igraph.Graph object."""
 
     # create temp files
     infofp, nodefp, edgefp, edgetmp = fileutil.create_tmp_files(4)
@@ -1021,10 +1021,8 @@ def gfa2graph(filepath: str, gfa_version: float) -> ig.Graph:
     awkfp_g12c = os.path.join(hapinfo.srcpath, "lib", "gfa12csv.awk")
     awkfp_g22c = os.path.join(hapinfo.srcpath, "lib", "gfa22csv.awk")
 
-    zcat = ["zcat", filepath]
     # `awk` -- convert the GFA format subgraph to CSV tables of nodes and edges, plus a info file
     awk = [
-        "|",
         "awk",
         "-v",
         f"infofp={infofp}",
@@ -1040,6 +1038,7 @@ def gfa2graph(filepath: str, gfa_version: float) -> ig.Graph:
         awk.append(awkfp_g12c)
     else:  # GFA 2
         awk.append(awkfp_g22c)
+    awk.append(filepath)
 
     locale = ["LC_ALL=C"]
 
@@ -1057,12 +1056,11 @@ def gfa2graph(filepath: str, gfa_version: float) -> ig.Graph:
     sed_n = sed + [r"1i\name\tlength\tfrequency\tsources", nodefp]
     sed_e = sed + [r"1i\source\ttarget", edgefp]
 
-    cmd1 = zcat + awk
-    cmd2 = locale + join1 + sort_e2 + join2
-    subprocess.run(" ".join(cmd1), shell=True)
+    cmd = locale + join1 + sort_e2 + join2
+    subprocess.run(awk)
     subprocess.run(" ".join(locale + sort_n), shell=True, executable="/bin/bash")
     subprocess.run(" ".join(locale + sort_e1), shell=True, executable="/bin/bash")
-    subprocess.run(" ".join(cmd2), shell=True, executable="/bin/bash")
+    subprocess.run(" ".join(cmd), shell=True, executable="/bin/bash")
     subprocess.run(sed_n)
     subprocess.run(sed_e)
 
@@ -1139,6 +1137,9 @@ def main(args: argparse.Namespace):
     #     pass
 
     outdir = args.outdir if args.outdir else os.getcwd()
+    outdir = os.path.normpath(outdir)
+    if not os.path.exists(outdir):
+        os.mkdir(outdir)
 
     # subgraph as inputs
     if args.subgraph:
@@ -1147,7 +1148,11 @@ def main(args: argparse.Namespace):
         else:
             subg_fps = [os.path.normpath(fp) for fp in args.subgraph]
     else:
-        pgname = typeutil.remove_suffix_containing(os.path.basename(args.file), ".gfa")
+        gfafp = os.path.normpath(args.file)
+        if not os.path.exists(gfafp):
+            raise FileNotFoundError(f"File {args.file} not found.")
+
+        pgname = typeutil.remove_suffix_containing(os.path.basename(gfafp), ".gfa")
 
         # divide into subgraphs
         subgdir = f"{outdir}/{pgname}-subgraph"
@@ -1170,7 +1175,7 @@ def main(args: argparse.Namespace):
                 "python3",
                 f"{hapinfo.srcpath}/main.py",
                 "divide",
-                args.file,
+                gfafp,
                 "-o",
                 subgdir,
             ]
@@ -1180,7 +1185,7 @@ def main(args: argparse.Namespace):
             subg_fps = fileutil.get_files_from_dir(subgdir, "gfa")
         except FileNotFoundError:
             build_in_parallel(
-                args.file, outdir, args
+                gfafp, outdir, args
             )  # build Hierarchical Pangenome from one graph
             return
 
