@@ -10,10 +10,10 @@ import igraph as ig
 import pandas as pd
 import multiprocessing as mp
 
+import hap
 from hap.lib import gfautil
 from hap.lib import fileutil
 from hap.lib import typeutil
-from hap import hapinfo
 
 # TODO: rewrite some DataFrame operations in a more efficient & elegant way
 
@@ -968,7 +968,7 @@ def union(
 def register_command(subparsers: argparse._SubParsersAction, module_help_map: dict):
     psr_build = subparsers.add_parser(
         _PROG,
-        prog=f"{hapinfo.name} {_PROG}",
+        prog=f"{hap.name} {_PROG}",
         description="Build a Hierarchical Pangenome from a pangenome graph in GFA format.",
         help="build a Hierarchical Pangenome",
     )
@@ -1017,9 +1017,9 @@ def gfa2graph(filepath: str, gfa_version: float) -> ig.Graph:
     infofp, nodefp, edgefp, edgetmp = fileutil.create_tmp_files(4)
 
     # get awk scripts
-    awkfp_pps = os.path.join(hapinfo.srcpath, "lib", "parse_pansn_str.awk")
-    awkfp_g12c = os.path.join(hapinfo.srcpath, "lib", "gfa12csv.awk")
-    awkfp_g22c = os.path.join(hapinfo.srcpath, "lib", "gfa22csv.awk")
+    awkfp_pps = os.path.join(hap.pkgroot, "lib", "parse_pansn_str.awk")
+    awkfp_g12c = os.path.join(hap.pkgroot, "lib", "gfa12csv.awk")
+    awkfp_g22c = os.path.join(hap.pkgroot, "lib", "gfa22csv.awk")
 
     # `awk` -- convert the GFA format subgraph to CSV tables of nodes and edges, plus a info file
     awk = [
@@ -1173,7 +1173,7 @@ def main(args: argparse.Namespace):
         subprocess.run(
             [
                 "python3",
-                f"{hapinfo.srcpath}/main.py",
+                f"{hap.pkgpath}/main.py",
                 "divide",
                 gfafp,
                 "-o",
