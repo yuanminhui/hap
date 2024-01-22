@@ -1,9 +1,13 @@
-data
+.mypy_cache/
+/.vscode/
+/.coverage
+/.coverage.*
+/.nox/
+/.python-version
+/.pytype/
+/dist/
+/docs/_build/
+/src/*.egg-info/
+__pycache__/
 
-myenv
-tests
-
-dist
-.vscode
-__pycache__
-*.egg-info
+data/
