@@ -2,7 +2,7 @@ import os
 import subprocess
 
 from hap import hapinfo
-from hap.lib import fileutil
+from hap.lib import fileutil, typeutil
 
 
 def get_gfa_version(filepath: str) -> float:
@@ -52,15 +52,15 @@ def get_gfa_version(filepath: str) -> float:
         return ver
 
 
-def move_sequence(filepath: str, gfa_version: float, seqfp: str = None):
-    """Move the sequences in a GFA file to (gzipped) `seqfp`, leaving
+def move_sequence(filepath: str, gfa_version: float, outdir: str):
+    """Move the sequences in a GFA file to (gzipped) `{basename}.seq.gz`, leaving
     a `*` as placeholder, add `LN` tag if not exist, and return the file path of
     the modified GFA file."""
 
-    outfp_base = filepath.replace(".gfa", "")
-    if not seqfp:
-        seqfp = outfp_base + ".seq.gz"
-    outfp = outfp_base + ".min.gfa"
+    basename = typeutil.remove_suffix_containing(os.path.basename(filepath), ".gfa")
+    outdir = os.path.normpath(outdir)
+    seqfp = outdir + "/" + basename + ".seq.gz"
+    outfp = outdir + "/" + basename + ".min.gfa"
     if os.path.exists(seqfp):
         os.remove(seqfp)
 
@@ -182,13 +182,12 @@ def preprocess_gfa(filepath: str, outdir: str):
 
     if filepath.endswith(".gz"):
         gfafp = fileutil.ungzip_file(gfafp)  # temp ungzipped GFA
-    seqfp = outdir + "/" + os.path.basename(gfafp).replace(".gfa", ".seq.gz")
 
     try:
         gfaver = get_gfa_version(gfafp)
-        gfamin = move_sequence(gfafp, gfaver, seqfp)
+        gfamin = move_sequence(gfafp, gfaver, outdir)
     finally:
         if filepath.endswith(".gz"):
             os.remove(gfafp)
 
-    return gfaver, gfamin, seqfp
+    return gfamin, gfaver

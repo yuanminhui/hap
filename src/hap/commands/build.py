@@ -1079,7 +1079,7 @@ def build_in_parallel(filepath: list[str], outdir: str, min_resolution: float):
     with mp.Pool() as pool:
         pp_res = pool.map(pp_gfa, filepath)
 
-    gfavers, gfamins, seqfps = zip(*pp_res)
+    gfamins, _ = zip(*pp_res)
 
     sg_hpbd = functools.partial(
         build,
@@ -1088,14 +1088,12 @@ def build_in_parallel(filepath: list[str], outdir: str, min_resolution: float):
     )
     with mp.Pool() as pool:
         try:
-            pool.starmap(sg_hpbd, zip(gfamins, gfavers))
+            pool.starmap(sg_hpbd, pp_res)
         finally:
             if click.confirm(
                 f"Delete temporary files: {gfamins}?", default=True
             ):  # TODO: remove this after debugging
                 pool.map_async(os.remove, gfamins)
-
-    return list(seqfps)  # TODO: decide what to return
 
 
 def validate_arg_path(
