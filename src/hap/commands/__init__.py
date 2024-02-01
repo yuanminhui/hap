@@ -9,6 +9,6 @@ for modfp in curdir:
         modname = modfp.stem
         mod = importlib.import_module("." + modname, package=__name__)
 
-        funcname = "cli"
+        funcname = "main"
         if funcname in dir(mod):
             globals()[modname] = getattr(mod, funcname)

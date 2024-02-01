@@ -15,5 +15,5 @@ for itemname in dir(commands):
         cli.add_command(item, name=itemname)
 
 
-# if __name__ == "__main__":
-#     cli(prog_name="hap")  # pragma: no cover
+if __name__ == "__main__":
+    cli(prog_name="hap")  # pragma: no cover

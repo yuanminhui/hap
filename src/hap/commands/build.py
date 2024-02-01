@@ -1,19 +1,23 @@
 import os
 import math
 import collections
+import pathlib
+import shutil
 import subprocess
 import copy
 import functools
-import argparse
+import tempfile
 
 import igraph as ig
 import pandas as pd
 import multiprocessing as mp
+import click
 
 import hap
 from hap.lib import gfautil
 from hap.lib import fileutil
 from hap.lib import typeutil
+from hap.commands.divide import main as divide
 
 # TODO: rewrite some DataFrame operations in a more efficient & elegant way
 
@@ -880,7 +884,7 @@ def export(
     rt: pd.DataFrame,
     st: pd.DataFrame,
     meta: dict,
-    outfp_base: str,
+    basepath: str,
     format="st",
 ):
     """Export region-segment tree to assigned format."""
@@ -926,88 +930,43 @@ def export(
             how="left",
             suffixes=("", "_r"),
         ).drop("segments", axis=1)
-        st.to_csv(outfp_base + ".st.tsv", sep="\t", na_rep="*", index=False)
+        st.to_csv(basepath + ".st.tsv", sep="\t", na_rep="*", index=False)
 
         meta["sources"] = ",".join(meta["sources"])
         metasr = pd.Series(meta)
-        metasr.to_csv(outfp_base + ".meta.tsv", sep="\t", na_rep="*", header=False)
+        metasr.to_csv(basepath + ".meta.tsv", sep="\t", na_rep="*", header=False)
 
     elif format == "rst":
-        rt.to_csv(outfp_base + ".rt.tsv", sep="\t", na_rep="*", index=False)
-        st.to_csv(outfp_base + ".st.tsv", sep="\t", na_rep="*", index=False)
+        rt.to_csv(basepath + ".rt.tsv", sep="\t", na_rep="*", index=False)
+        st.to_csv(basepath + ".st.tsv", sep="\t", na_rep="*", index=False)
     else:
         raise ValueError("Unsupported output format.")
 
 
-def union(
-    indir: str,
-    pgname: str,
-    outdir: str,
-    format: str = "hp",
-):
-    """Union a list of sub-Hierarchical-Pangenomes into a whole."""
+# def union(
+#     indir: str,
+#     pgname: str,
+#     outdir: str,
+#     format: str = "hp",
+# ):
+#     """Union a list of sub-Hierarchical-Pangenomes into a whole."""
 
-    # TODO: Add `pgname` prefix to each element's name
+#     # TODO: Add `pgname` prefix to each element's name
 
-    if format == "hp":
-        subprocess.run(f"cat {indir}/*.hp > {outdir}/{pgname}.hp", shell=True)
-    elif format == "tsv":
-        cat = functools.partial(subprocess.run, shell=True)
-        with mp.Pool() as pool:
-            pool.map(
-                cat,
-                [
-                    f"cat {indir}/*.rt.tsv > {outdir}/{pgname}.rt.tsv",
-                    f"cat {indir}/*.st.tsv > {outdir}/{pgname}.st.tsv",
-                ],
-            )
-    else:
-        raise ValueError("Unsupported output format.")
-
-
-def register_command(subparsers: argparse._SubParsersAction, module_help_map: dict):
-    psr_build = subparsers.add_parser(
-        _PROG,
-        prog=f"{hap.name} {_PROG}",
-        description="Build a Hierarchical Pangenome from a pangenome graph in GFA format.",
-        help="build a Hierarchical Pangenome",
-    )
-    psr_build.set_defaults(func=main)
-    module_help_map[_PROG] = psr_build.print_help
-
-    # I/O options
-    grp_io = psr_build.add_argument_group("I/O options")
-    grp_input = grp_io.add_mutually_exclusive_group(required=True)
-    grp_input.add_argument("file", nargs="?", help="input graph file")
-    grp_input.add_argument(
-        "-s",
-        "--subgraph",
-        nargs="+",
-        help="use a group of graphs as input",
-    )
-    grp_io.add_argument("-o", "--outdir", help="output directory")
-
-    # Build parameters
-    grp_build_params = psr_build.add_argument_group("Build parameters")
-    # grp_build_params.add_argument(
-    #     "--no-wrap",
-    #     action="store_true",
-    #     help="Do not wrap elements to form into a Hierarchical Pangenome, return a intermediate Region-Segment Tree for further editing",
-    # )
-    # grp_build_params.add_argument(
-    #     "-w",
-    #     "--wrap",
-    #     action="store_true",
-    #     help="Wrap a Region-Segment Tree generated from build into a Hierarchical Pangenome",
-    # )
-    grp_build_params.add_argument(
-        "-r",
-        "--min-res",
-        type=float,
-        default=0.04,
-        dest="minres",
-        help="minimum resolution of the Hierarchical Pangenome, in bp/px",
-    )
+#     if format == "hp":
+#         subprocess.run(f"cat {indir}/*.hp > {outdir}/{pgname}.hp", shell=True)
+#     elif format == "tsv":
+#         cat = functools.partial(subprocess.run, shell=True)
+#         with mp.Pool() as pool:
+#             pool.map(
+#                 cat,
+#                 [
+#                     f"cat {indir}/*.rt.tsv > {outdir}/{pgname}.rt.tsv",
+#                     f"cat {indir}/*.st.tsv > {outdir}/{pgname}.st.tsv",
+#                 ],
+#             )
+#     else:
+#         raise ValueError("Unsupported output format.")
 
 
 def gfa2graph(filepath: str, gfa_version: float) -> ig.Graph:
@@ -1057,57 +1016,60 @@ def gfa2graph(filepath: str, gfa_version: float) -> ig.Graph:
     sed_e = sed + [r"1i\source\ttarget", edgefp]
 
     cmd = locale + join1 + sort_e2 + join2
-    subprocess.run(awk)
-    subprocess.run(" ".join(locale + sort_n), shell=True, executable="/bin/bash")
-    subprocess.run(" ".join(locale + sort_e1), shell=True, executable="/bin/bash")
-    subprocess.run(" ".join(cmd), shell=True, executable="/bin/bash")
-    subprocess.run(sed_n)
-    subprocess.run(sed_e)
+    try:
+        subprocess.run(awk)
+        subprocess.run(" ".join(locale + sort_n), shell=True, executable="/bin/bash")
+        subprocess.run(" ".join(locale + sort_e1), shell=True, executable="/bin/bash")
+        subprocess.run(" ".join(cmd), shell=True, executable="/bin/bash")
+        subprocess.run(sed_n)
+        subprocess.run(sed_e)
 
-    # convertions
-    nodedf = pd.read_csv(
-        nodefp,
-        sep="\t",
-        dtype={"name": "str", "length": "int32", "frequency": "float32"},
-        converters={"sources": lambda s: s.split(",")},
-    )
-    edgedf = pd.read_csv(edgefp, sep="\t", dtype={"source": "str", "target": "str"})
+        # convertions
+        nodedf = pd.read_csv(
+            nodefp,
+            sep="\t",
+            dtype={"name": "str", "length": "int32", "frequency": "float32"},
+            converters={"sources": lambda s: s.split(",")},
+        )
+        edgedf = pd.read_csv(edgefp, sep="\t", dtype={"source": "str", "target": "str"})
 
-    g = ig.Graph.DataFrame(edgedf, vertices=nodedf, use_vids=False)
-    if not g.is_dag:
-        raise ValueError("Cycle detected in graph, modify it into a DAG and re-run.")
+        g = ig.Graph.DataFrame(edgedf, vertices=nodedf, use_vids=False)
+        if not g.is_dag:
+            raise ValueError(
+                "Cycle detected in graph, modify it into a DAG and re-run."
+            )
 
-    # store metadata in graph attributes
-    infodf = pd.read_csv(infofp, sep="\t", header=None, names=["key", "value"])
-    infodict = infodf.set_index("key")["value"].to_dict()
-    for k, v in infodict.items():
-        g[k] = v
+        # store metadata in graph attributes
+        infodf = pd.read_csv(infofp, sep="\t", header=None, names=["key", "value"])
+        infodict = infodf.set_index("key")["value"].to_dict()
+        for k, v in infodict.items():
+            g[k] = v
 
-    # remove temp files
-    fileutil.remove_files([infofp, nodefp, edgefp, edgetmp])
+    finally:
+        # remove temp files
+        fileutil.remove_files([infofp, nodefp, edgefp, edgetmp])
 
     return g
 
 
-def build(filepath: str, gfa_version: float, outdir: str, args, subg_name: str = None):
+def build(filepath: str, gfa_version: float, outdir: str, min_resolution: float):
     """Build a Hierarchical Pangenome from a inseparable graph."""
 
-    if not subg_name:
-        subg_name = os.path.basename(filepath).split(".", 1)[0]
-    outfp_base = outdir + "/" + subg_name
+    basename = typeutil.remove_suffix_containing(os.path.basename(filepath), ".gfa")
+    basepath = os.path.join(outdir, basename)
 
     g = gfa2graph(filepath, gfa_version)
     rst = graph2rstree(g)
     rst = calculate_properties_l2r(*rst)
 
-    # if not args.no_wrap:
-    rst = wrap_rstree(*rst, args.minres)
+    # if not no_wrap:
+    rst = wrap_rstree(*rst, min_resolution)
     rst = calculate_properties_r2l(*rst)
 
-    export(*rst, outfp_base)
+    export(*rst, basepath)
 
 
-def build_in_parallel(filepath: list[str] | str, outdir: str, args):
+def build_in_parallel(filepath: list[str], outdir: str, min_resolution: float):
     """Build Hierarchical Pangenomes in parallel for a list of GFA files."""
 
     pp_gfa = functools.partial(
@@ -1122,72 +1084,139 @@ def build_in_parallel(filepath: list[str] | str, outdir: str, args):
     sg_hpbd = functools.partial(
         build,
         outdir=outdir,
-        args=args,
+        min_resolution=min_resolution,
     )
     with mp.Pool() as pool:
-        pool.starmap(sg_hpbd, zip(gfamins, gfavers))
-        pool.map_async(os.remove, gfamins)
+        try:
+            pool.starmap(sg_hpbd, zip(gfamins, gfavers))
+        finally:
+            if click.confirm(
+                f"Delete temporary files: {gfamins}?", default=True
+            ):  # TODO: remove this after debugging
+                pool.map_async(os.remove, gfamins)
 
     return list(seqfps)  # TODO: decide what to return
 
 
-def main(args: argparse.Namespace):
-    # if args.wrap:
+def validate_arg_path(
+    ctx: click.Context, param: click.Parameter, value: tuple[pathlib.Path]
+):
+    """Validate argument `path` of the `build` command."""
+
+    if ctx.obj["subgraph"]:
+        if len(value) == 1:
+            if value[0].is_dir():
+                return value
+            else:
+                raise click.BadParameter(
+                    "More than one file, or a directory must be provided if specified with `-s/--subgraph`."
+                )
+        else:
+            for v in value:
+                if v.is_dir:
+                    raise click.BadParameter(
+                        "Multiple directories are not allowed, use one directory or a list of files instead."
+                    )
+            return value
+    else:
+        if len(value) > 1:
+            raise click.BadParameter(
+                "Building for more than one graph is not supported. use `-s/--subgraph` if building from a group of subgraphs."
+            )
+        return value
+
+
+@click.command()
+@click.pass_context
+@click.short_help("Build a Hierarchical Pangenome")
+@click.argument(
+    "path",
+    nargs=-1,
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=pathlib.Path),
+    callback=validate_arg_path,
+)
+@click.option(
+    "-s",
+    "--subgraph",
+    is_flag=True,
+    default=False,
+    help="Use a group of graphs as input",
+)
+@click.option(
+    "-o",
+    "--outdir",
+    type=click.Path(file_okay=False, path_type=pathlib.Path),
+    help="Output directory",
+)
+@click.option(
+    "-r",
+    "--min-res",
+    type=float,
+    default=0.04,
+    help="Minimum resolution of the Hierarchical Pangenome, in bp/px",
+)
+def main(
+    ctx: click.Context,
+    path: tuple[pathlib.Path],
+    subgraph: bool,
+    outdir: pathlib.Path,
+    min_res: float,
+):
+    """
+    Build a Hierarchical Pangenome from a pangenome graph in GFA format.
+
+    PATH: Path to the pangenome graph in GFA format. If `-s/--subgraph` is specified, PATH should be a list of subgraphs or a
+    directory containing the subgraphs.
+    """
+
+    # if wrap:
     #     # TODO: parse .hp file and run build_hierarchical_graph()
     #     pass
 
-    outdir = args.outdir if args.outdir else os.getcwd()
-    outdir = os.path.normpath(outdir)
-    if not os.path.exists(outdir):
-        os.mkdir(outdir)
-
+    # get `basename` and `subg_fps`
     # subgraph as inputs
-    if args.subgraph:
-        if len(args.subgraph) == 1:
-            subg_fps = fileutil.get_files_from_dir(args.subgraph[0], "gfa")
+    if subgraph:
+        if len(path) == 1:
+            subg_fps = fileutil.get_files_from_dir(str(path[0]), "gfa")
         else:
-            subg_fps = [os.path.normpath(fp) for fp in args.subgraph]
+            subg_fps = [str(fp) for fp in path]
+            subg_fns = [str(fp.name) for fp in subg_fps]
+        basename = os.path.commonprefix(subg_fns)
     else:
-        gfafp = os.path.normpath(args.file)
-        if not os.path.exists(gfafp):
-            raise FileNotFoundError(f"File {args.file} not found.")
-
-        pgname = typeutil.remove_suffix_containing(os.path.basename(gfafp), ".gfa")
-
+        gfafp = path[0]
+        basename = typeutil.remove_suffix_containing(gfafp.name, ".gfa")
         # divide into subgraphs
-        subgdir = f"{outdir}/{pgname}-subgraph"
-        if os.path.exists(subgdir):
-            ctn = input(
-                f"There is a directory '{pgname}-subgraph' in the output directory, continuing the program will erase files in it. Continue? (y/n) "
-            )
-            invalid = True
-            while invalid:
-                if ctn.lower() == "y":
-                    subprocess.run(["rm", "-rf", subgdir])
-                    invalid = False
-                elif ctn.lower() == "n":
-                    raise SystemExit("Unable to write to directory.")
-                else:
-                    ctn = input("Please enter 'y' or 'n'. ")
-        os.mkdir(subgdir)
-        subprocess.run(
-            [
-                "python3",
-                f"{hap.pkgpath}/main.py",
-                "divide",
-                gfafp,
-                "-o",
-                subgdir,
-            ]
-        )
+        subgdir = tempfile.mkdtemp(prefix="hap.", suffix=".subgraph")
+        ctx.invoke(divide, file=gfafp, outdir=pathlib.Path(subgdir))
 
         try:
             subg_fps = fileutil.get_files_from_dir(subgdir, "gfa")
         except FileNotFoundError:
-            build_in_parallel(
-                gfafp, outdir, args
-            )  # build Hierarchical Pangenome from one graph
-            return
+            subg_fps = [str(gfafp)]
+
+    if not outdir:
+        outdir = pathlib.Path.cwd() / f"{basename}.hap"
+    outdir = outdir.resolve()
+    if outdir.exists() and not fileutil.is_dir_empty(str(outdir)):
+        if click.confirm(
+            f"Output directory {outdir} is not empty, continuing the program will erase files in it. Continue?",
+            abort=True,
+        ):
+            shutil.rmtree(str(outdir))
+    outdir.mkdir(parents=True, exist_ok=True)
 
     # build Hierachical Pangenomes
-    build_in_parallel(subg_fps, outdir, args)
+    try:
+        build_in_parallel(subg_fps, str(outdir), min_res)
+    finally:
+        if not subgraph:
+            if click.confirm(
+                "Delete temporary subgraphs?",
+                default=True,
+            ):
+                shutil.rmtree(subgdir)
+
+
+if __name__ == "__main__":
+    main()

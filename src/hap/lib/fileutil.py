@@ -67,3 +67,9 @@ def ungzip_file(filepath: str):
         fout.writelines(fin)
 
     return outfp
+
+
+def is_dir_empty(dirpath: str) -> bool:
+    """Check if a directory is empty."""
+
+    return len(os.listdir(dirpath)) == 0

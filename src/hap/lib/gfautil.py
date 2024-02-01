@@ -159,12 +159,13 @@ def extract_subgraph(name: str, gfa_path: str, gfa_version: float, outdir: str):
     # `cat` -- concatenate main records with set records
     cat = ["cat", mainfp, setfp, ">", outfp]
 
-    subprocess.run(" ".join(grep), shell=True)
-    subprocess.run(" ".join(awk), shell=True)
-    subprocess.run(" ".join(cat), shell=True)
-
-    # remove temp files
-    fileutil.remove_files([mainfp, setfp])
+    try:
+        subprocess.run(" ".join(grep), shell=True)
+        subprocess.run(" ".join(awk), shell=True)
+        subprocess.run(" ".join(cat), shell=True)
+    finally:
+        # remove temp files
+        fileutil.remove_files([mainfp, setfp])
 
     return outfp
 
@@ -183,10 +184,11 @@ def preprocess_gfa(filepath: str, outdir: str):
         gfafp = fileutil.ungzip_file(gfafp)  # temp ungzipped GFA
     seqfp = outdir + "/" + os.path.basename(gfafp).replace(".gfa", ".seq.gz")
 
-    gfaver = get_gfa_version(gfafp)
-    gfamin = move_sequence(gfafp, gfaver, seqfp)
-
-    if filepath.endswith(".gz"):
-        os.remove(gfafp)
+    try:
+        gfaver = get_gfa_version(gfafp)
+        gfamin = move_sequence(gfafp, gfaver, seqfp)
+    finally:
+        if filepath.endswith(".gz"):
+            os.remove(gfafp)
 
     return gfaver, gfamin, seqfp
