@@ -1126,9 +1126,8 @@ def validate_arg_path(
         return value
 
 
-@click.command()
+@click.command("build", short_help="Build a Hierarchical Pangenome")
 @click.pass_context
-@click.short_help("Build a Hierarchical Pangenome")
 @click.argument(
     "path",
     nargs=-1,
@@ -1212,7 +1211,7 @@ def main(
     finally:
         if not subgraph:
             if click.confirm(
-                "Delete temporary subgraphs?",
+                f"Delete temporary subgraph directory: {subgdir}?",
                 default=True,
             ):
                 shutil.rmtree(subgdir)
