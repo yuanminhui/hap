@@ -75,8 +75,10 @@ class Region:
     def to_dict(self):
         return self.__dict__
 
-
-_PROG = "build"
+    def from_dict(self, dict: dict):
+        for k, v in dict.items():
+            if hasattr(self, k):
+                setattr(self, k, v)
 
 
 _ids = {
@@ -451,8 +453,10 @@ def process_path(
 
         # or add segment to existing region
         else:
-            region = rt[rt["before"] == g.vs[before]["name"]].iloc[0].to_dict()
+            rg_dict = rt[rt["before"] == g.vs[before]["name"]].iloc[0].to_dict()
             segment = Segment(_get_id("s"))
+            region = Region(rg_dict["id"], rg_dict["type"])
+            region.from_dict(rg_dict)
             segment.level_range = region.level_range
 
     # Generate current path & process its nodes
