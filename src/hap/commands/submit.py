@@ -117,6 +117,7 @@ def save_db_conn_info_to_env(db_conn_info: dict[str, Any]):
 
 @click.command(
     "submit",
+    context_settings=hap.ctx_settings,
     short_help="Submit a Hierarchical Pangenome to database",
 )
 @click.argument(

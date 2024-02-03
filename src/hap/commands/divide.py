@@ -5,12 +5,14 @@ import pathlib
 import shutil
 
 import click
+import hap
 
 from hap.lib import fileutil, gfautil, typeutil
 
 
 @click.command(
     "divide",
+    context_settings=hap.ctx_settings,
     short_help="Divide a graph into subgraphs",
 )
 @click.argument(

@@ -1,7 +1,7 @@
 import os
 import subprocess
 
-from hap import hapinfo
+import hap
 from hap.lib import fileutil, typeutil
 
 
@@ -90,7 +90,7 @@ def extract_subgraph_names(
     `O|U` lines."""
 
     # get awk scripts
-    awkfp_pps = os.path.join(hapinfo.srcpath, "lib", "parse_pansn_str.awk")
+    awkfp_pps = os.path.join(hap.pkgroot, "lib", "parse_pansn_str.awk")
 
     locale = ["LC_ALL=C"]
     grep = ["grep"]
@@ -140,8 +140,8 @@ def extract_subgraph(name: str, gfa_path: str, gfa_version: float, outdir: str):
     setfp, mainfp = fileutil.create_tmp_files(2)
 
     # get awk scripts
-    awkfp_es1 = os.path.join(hapinfo.srcpath, "lib", "extract_subg1.awk")
-    awkfp_es2 = os.path.join(hapinfo.srcpath, "lib", "extract_subg2.awk")
+    awkfp_es1 = os.path.join(hap.pkgroot, "lib", "extract_subg1.awk")
+    awkfp_es2 = os.path.join(hap.pkgroot, "lib", "extract_subg2.awk")
 
     # `grep` -- get records that contain set of nodes from the whole graph by subgraph name
     # `awk` -- extract node ids from set records, find related records by them

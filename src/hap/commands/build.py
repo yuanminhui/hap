@@ -705,9 +705,9 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, meta: dict, minres=0.04):
                     st.iat[si, st.columns.get_loc("sources")]
                 )
                 wrap_segment = wrap_region.add_segment(_get_id("s"))
-                wrap_region.length = (
-                    wrap_region.min_length
-                ) = wrap_segment.length = totallen
+                wrap_region.length = wrap_region.min_length = wrap_segment.length = (
+                    totallen
+                )
                 wrap_segment.frequency = len(wrap_segment.sources) / len(
                     meta["sources"]
                 )
@@ -1128,7 +1128,11 @@ def validate_arg_path(
         return value
 
 
-@click.command("build", short_help="Build a Hierarchical Pangenome")
+@click.command(
+    "build",
+    context_settings=hap.ctx_settings,
+    short_help="Build a Hierarchical Pangenome",
+)
 @click.pass_context
 @click.argument(
     "path",
