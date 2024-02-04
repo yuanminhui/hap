@@ -26,8 +26,16 @@ BEGIN {
 
     # link tip nodes
     nc = length(a)
-    print "start", substr(a[1], 1, length(a[1]) - 1) >> edgefp
-    print substr(a[nc], 1, length(a[nc]) - 1), "end" >> edgefp
+    start = substr(a[1], 1, length(a[1]) - 1)
+    end = substr(a[nc], 1, length(a[nc]) - 1)
+    if (!(start in startarr)) {
+        startarr[start]
+        print "start", start >> edgefp
+    }
+    if (!(end in endarr)) {
+        endarr[end]
+        print end, "end" >> edgefp
+    }
 
     # extract haplotype name
     resolved = parse_pansn_str($2, pa)
@@ -54,8 +62,16 @@ BEGIN {
 
     # link tip nodes
     nc = length(a)
-    print "start", a[1] >> edgefp
-    print a[nc], "end" >> edgefp
+    start = a[1]
+    end = a[nc]
+    if (!(start in startarr)) {
+        startarr[start]
+        print "start", start >> edgefp
+    }
+    if (!(end in endarr)) {
+        endarr[end]
+        print end, "end" >> edgefp
+    }
 
     # extract haplotype name
     resolved = parse_pansn_str($2, pa)

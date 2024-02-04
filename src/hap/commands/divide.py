@@ -7,7 +7,7 @@ import shutil
 import click
 import hap
 
-from hap.lib import fileutil, gfautil, typeutil
+from hap.lib import fileutil, gfautil
 
 
 @click.command(
@@ -38,7 +38,7 @@ def main(file: pathlib.Path, outdir: pathlib.Path, contig: bool):
     FILE: GFA file path of the graph.
     """
 
-    basename = typeutil.remove_suffix_containing(file.name, ".gfa")
+    basename = fileutil.remove_suffix_containing(file.name, ".gfa")
     if not outdir:
         outdir = pathlib.Path.cwd() / f"{basename}.subgraphs"
     if outdir.exists() and not fileutil.is_dir_empty(str(outdir)):

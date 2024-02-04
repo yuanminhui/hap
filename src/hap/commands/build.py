@@ -16,7 +16,7 @@ import click
 import hap
 from hap.lib import gfautil
 from hap.lib import fileutil
-from hap.lib import typeutil
+from hap.lib import fileutil
 from hap.commands.divide import main as divide
 
 # TODO: rewrite some DataFrame operations in a more efficient & elegant way
@@ -1061,7 +1061,7 @@ def gfa2graph(filepath: str, gfa_version: float) -> ig.Graph:
 def build(filepath: str, gfa_version: float, outdir: str, min_resolution: float):
     """Build a Hierarchical Pangenome from a inseparable graph."""
 
-    basename = typeutil.remove_suffix_containing(os.path.basename(filepath), ".gfa")
+    basename = fileutil.remove_suffix_containing(os.path.basename(filepath), ".gfa")
     basepath = os.path.join(outdir, basename)
 
     g = gfa2graph(filepath, gfa_version)
@@ -1192,7 +1192,7 @@ def main(
         basename = os.path.commonprefix(subg_fns)
     else:
         gfafp = path[0]
-        basename = typeutil.remove_suffix_containing(gfafp.name, ".gfa")
+        basename = fileutil.remove_suffix_containing(gfafp.name, ".gfa")
         # divide into subgraphs
         subgdir = tempfile.mkdtemp(prefix="hap.", suffix=".subgraph")
         ctx.invoke(divide, file=gfafp, outdir=pathlib.Path(subgdir))

@@ -2,7 +2,7 @@ import os
 import subprocess
 
 import hap
-from hap.lib import fileutil, typeutil
+from hap.lib import fileutil
 
 
 def get_gfa_version(filepath: str) -> float:
@@ -57,10 +57,10 @@ def move_sequence(filepath: str, gfa_version: float, outdir: str):
     a `*` as placeholder, add `LN` tag if not exist, and return the file path of
     the modified GFA file."""
 
-    basename = typeutil.remove_suffix_containing(os.path.basename(filepath), ".gfa")
+    basename = fileutil.remove_suffix_containing(os.path.basename(filepath), ".gfa")
     outdir = os.path.normpath(outdir)
     seqfp = outdir + "/" + basename + ".seq.gz"
-    outfp = outdir + "/" + basename + ".min.gfa"
+    outfp = "/tmp/" + basename + ".gfa"
     if os.path.exists(seqfp):
         os.remove(seqfp)
 
@@ -134,7 +134,7 @@ def extract_subgraph_names(
 def extract_subgraph(subg_name: str, gfa_path: str, gfa_version: float, outdir: str):
     """Extract a subgraph by name from a GFA file, returning the sub-GFA's file path."""
 
-    gfa_name = typeutil.remove_suffix_containing(os.path.basename(gfa_path), ".gfa")
+    gfa_name = fileutil.remove_suffix_containing(os.path.basename(gfa_path), ".gfa")
     outfp = outdir + "/" + gfa_name + "." + subg_name + ".gfa"
 
     # create temp files
