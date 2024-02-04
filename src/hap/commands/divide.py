@@ -43,7 +43,7 @@ def main(file: pathlib.Path, outdir: pathlib.Path, contig: bool):
         outdir = pathlib.Path.cwd() / f"{basename}.subgraphs"
     if outdir.exists() and not fileutil.is_dir_empty(str(outdir)):
         if click.confirm(
-            f"Output directory {outdir} is not empty, continuing the program will erase files in it. Continue?",
+            f"Output directory {str(outdir)} is not empty, continuing the program will erase files in it. Continue?",
             abort=True,
         ):
             shutil.rmtree(str(outdir))
@@ -51,6 +51,8 @@ def main(file: pathlib.Path, outdir: pathlib.Path, contig: bool):
 
     if file.suffix == ".gz":
         gfafp = fileutil.ungzip_file(str(file))  # temp ungzipped GFA
+    else:
+        gfafp = str(file)
     gfaver = gfautil.get_gfa_version(gfafp)
 
     subgnames = gfautil.extract_subgraph_names(
@@ -63,7 +65,7 @@ def main(file: pathlib.Path, outdir: pathlib.Path, contig: bool):
         gfautil.extract_subgraph,
         gfa_path=gfafp,
         gfa_version=gfaver,
-        outdir=outdir,
+        outdir=str(outdir),
     )
     try:
         with mp.Pool() as pool:

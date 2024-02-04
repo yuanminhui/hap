@@ -512,9 +512,11 @@ def process_path(
         paths.append(path)
         segment.is_wrapper = True
     region.segments.append(segment.id)
-    st = pd.concat(
-        [st, pd.DataFrame([segment.to_dict()])], ignore_index=True, copy=False
-    )
+    segdf = pd.DataFrame([segment.to_dict()])
+    if st.empty:
+        st = segdf
+    else:
+        st = pd.concat([st, segdf], ignore_index=True, copy=False)
 
     # Process allele region if have
     if g.vs[start]["name"] != "start":
@@ -1105,7 +1107,7 @@ def validate_arg_path(
 ):
     """Validate argument `path` of the `build` command."""
 
-    if ctx.obj["subgraph"]:
+    if "subgraph" in ctx.params and ctx.params["subgraph"]:
         if len(value) == 1:
             if value[0].is_dir():
                 return value
@@ -1205,7 +1207,7 @@ def main(
     outdir = outdir.resolve()
     if outdir.exists() and not fileutil.is_dir_empty(str(outdir)):
         if click.confirm(
-            f"Output directory {outdir} is not empty, continuing the program will erase files in it. Continue?",
+            f"Output directory {str(outdir)} is not empty, continuing the program will erase files in it. Continue?",
             abort=True,
         ):
             shutil.rmtree(str(outdir))

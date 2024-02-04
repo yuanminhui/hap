@@ -131,10 +131,11 @@ def extract_subgraph_names(
         return []
 
 
-def extract_subgraph(name: str, gfa_path: str, gfa_version: float, outdir: str):
+def extract_subgraph(subg_name: str, gfa_path: str, gfa_version: float, outdir: str):
     """Extract a subgraph by name from a GFA file, returning the sub-GFA's file path."""
 
-    outfp = outdir + "/" + name + ".gfa"
+    gfa_name = typeutil.remove_suffix_containing(os.path.basename(gfa_path), ".gfa")
+    outfp = outdir + "/" + gfa_name + "." + subg_name + ".gfa"
 
     # create temp files
     setfp, mainfp = fileutil.create_tmp_files(2)
@@ -148,10 +149,10 @@ def extract_subgraph(name: str, gfa_path: str, gfa_version: float, outdir: str):
     grep = ["LC_ALL=C", "grep", "-E"]
     awk = ["awk", "-f"]
     if gfa_version < 2:
-        grep.append(f"'^(P|W).*{name}'")
+        grep.append(f"'^(P|W).*{subg_name}'")
         awk.append(awkfp_es1)
     else:  # GFA 2
-        grep.append(f"'^(O|U).*{name}'")
+        grep.append(f"'^(O|U).*{subg_name}'")
         awk.append(awkfp_es2)
     grep.extend([gfa_path, ">", setfp])
     awk.extend([setfp, gfa_path, ">", mainfp])
