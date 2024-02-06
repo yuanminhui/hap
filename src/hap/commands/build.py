@@ -1141,7 +1141,7 @@ def validate_arg_path(
     "path",
     nargs=-1,
     required=True,
-    type=click.Path(exists=True, dir_okay=False, path_type=pathlib.Path),
+    type=click.Path(exists=True, path_type=pathlib.Path),
     callback=validate_arg_path,
 )
 @click.option(
@@ -1189,8 +1189,8 @@ def main(
             subg_fps = fileutil.get_files_from_dir(str(path[0]), "gfa")
         else:
             subg_fps = [str(fp) for fp in path]
-            subg_fns = [str(fp.name) for fp in subg_fps]
-        basename = os.path.commonprefix(subg_fns)
+        subg_fns = [os.path.basename(fp) for fp in subg_fps]
+        basename = os.path.commonprefix(subg_fns).split(".")[0]
     else:
         gfafp = path[0]
         basename = fileutil.remove_suffix_containing(gfafp.name, ".gfa")
