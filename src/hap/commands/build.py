@@ -458,6 +458,7 @@ def process_path(
             region = Region(rg_dict["id"], rg_dict["type"])
             region.from_dict(rg_dict)
             segment.level_range = region.level_range
+            level = region.level_range[0]
 
     # Generate current path & process its nodes
     path = []
