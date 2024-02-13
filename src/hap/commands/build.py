@@ -405,10 +405,13 @@ def process_path(
 
     # or side path
     else:
-        before = g.neighbors(start, mode="in")[
-            0
-        ]  # PROBLEM: may have multiple "before" nodes
-        # TODO: eliminate multiple attachment relations
+        predecessors = g.neighbors(start, mode="in")
+        if len(predecessors) > 1:
+            raise ValueError(
+                "Unable to resolve complex graph structure. Flatten the graph and rerun."
+            )
+        else:
+            before = predecessors[0]  # TODO: eliminate multiple attachment relations
 
         # Split into regions if hasn't been treated
         if rt[rt["before"] == g.vs[before]["name"]].empty:
@@ -483,7 +486,9 @@ def process_path(
                     #             s = other
                     #             break
             if not s:
-                raise SystemExit("Internal Error: unsolved graph structure.")
+                raise ValueError(
+                    "Unable to resolve complex graph structure. Flatten the graph and rerun."
+                )
 
             d = g.add_vertex(_get_id("s"), length=0).index
             g.vs[d]["sources"] = []
@@ -525,14 +530,14 @@ def process_path(
         pi = g.vs[before]["path"]
         org_path = paths[pi]
         b = org_path.index(before)
-        afters = g.neighbors(node, mode="out")
-        for af in afters:
-            if af in visited:
-                region.after = g.vs[af][
-                    "name"
-                ]  # PROBLEM: may have multiple "after" nodes
-                # TODO: eliminate multiple attachment relations
-                break
+        successors = g.neighbors(node, mode="out")
+        afters = [s for s in successors if s in visited]
+        if len(afters) > 1:
+            raise ValueError(
+                "Unable to resolve complex graph structure. Flatten the graph and rerun."
+            )
+        af = afters[0]
+        region.after = g.vs[af]["name"]  # TODO: eliminate multiple attachment relations
         a = org_path.index(af)
         if b < a:
             org_ale_path = org_path[b + 1 : a]
