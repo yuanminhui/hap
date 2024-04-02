@@ -8,7 +8,7 @@ delete parr
 # get PanSN delimiter for the whole file
 if (delim == "") {
     split(" 0,0\\.0;0:0/0\\|0#0_0\\-", pps_delims, "0")   # possible delimiters
-    
+
     # find delimiter that occurs exactly twice
     for (i in pps_delims) {
         delim = pps_delims[i]
@@ -17,7 +17,7 @@ if (delim == "") {
             break
         }
     }
-    
+
     # doesn't follow PanSN convention, can't extract subgraph name
     if (pps_c != 2) {
         delim = ""

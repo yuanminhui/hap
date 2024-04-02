@@ -1,87 +1,44 @@
-import os
-import math
 import collections
-import pathlib
-import shutil
-import subprocess
 import copy
 import functools
+import math
+import multiprocessing as mp
+import os
+import pathlib
+import re
+import shutil
+import subprocess
 import tempfile
+from typing import Optional
 
+import click
 import igraph as ig
 import pandas as pd
-import multiprocessing as mp
-import click
+import psycopg2
 
 import hap
-from hap.lib import gfautil
+from hap.lib import database as db
 from hap.lib import fileutil
-from hap.lib import fileutil
-from hap.commands.divide import main as divide
-
-# TODO: rewrite some DataFrame operations in a more efficient & elegant way
-
-
-class Segment:
-    def __init__(self, id):
-        self.id = id
-        self.name = None
-        self.range = [0, 0]
-        self.sub_regions = []
-        self.level_range = [0, 0]
-        self.length = 0
-        self.rank = 0
-        self.frequency = 0
-        self.sources = []
-        self.dir_var = 0
-        self.total_var = 0
-        self.is_wrapper = False
-
-    def to_dict(self):
-        return self.__dict__
+from hap.lib import gfa
+from hap.lib.elements import Region
+from hap.lib.elements import Segment
+from hap.lib.error import (
+    DataInvalidError,
+    DatabaseError,
+    InternalError,
+    UnsupportedError,
+)
+from hap.lib.util_obj import ValidationResult
 
 
-class Region:
-    def __init__(self, id, type):
-        self.id = id
-        self.name = None
-        self.range = [0, 0]
-        self.parent_seg = None
-        self.segments = []
-        self.level_range = [0, 0]
-        self.length = 0
-        self.is_default = False
-        self.sources = []
-        self.is_var = True if type == "var" or type != "con" else False
-        self.type = type
-        self.total_var = 0
-        # to be discarded after process
-        self.min_length = 0
-        self.before = None
-        self.after = None
+# OPTIMIZE: Rewrite some DataFrame operations in a more efficient & elegant way
+# TODO: Build a class for the pangenome graph
+# TODO: Build a class for the hap
+# TODO: Organize the code into DDD-like structure
+# TODO: Refactor the class utils to composition or inheritance
 
-    def add_segment(self, id):
-        """Create and add segment to current region, setting the same `level_range`,
-        `sources`, and return the created segment.
-        If region `type` is `con` and no segment exists, added segment is set
-        to default."""
-
-        segment = Segment(id)
-        self.segments.append(segment.id)
-        segment.level_range = self.level_range
-        segment.sources = self.sources
-        return segment
-
-    def to_dict(self):
-        return self.__dict__
-
-    def from_dict(self, dict: dict):
-        for k, v in dict.items():
-            if hasattr(self, k):
-                setattr(self, k, v)
-
-
-_ids = {
+# Incremental IDs for element names
+identifiers = {
     "s": 0,
     "r": 0,
     "var": 0,
@@ -93,34 +50,321 @@ _ids = {
 }
 
 
-def _get_id(type: str) -> str:
-    _ids[type] += 1
+def get_id(type: str) -> str:
+    """Get an incremental ID by type. Returns a string like `s-1`."""
+
+    identifiers[type] += 1
     prefix = type if type == "s" or type == "r" else type.upper()
-    return "-".join([prefix, str(_ids[type])])
+    return "-".join([prefix, str(identifiers[type])])
+
+
+def validate_gfa(gfa_obj: gfa.GFA) -> ValidationResult:
+    """Validate a GFA file for building."""
+
+    if not gfa_obj.can_extract_length():
+        return ValidationResult(False, "The GFA file lacks length information.")
+    if len(gfa_obj.get_haplotypes()) == 0:
+        return ValidationResult(False, "The GFA file lacks haplotype information.")
+    return ValidationResult(True, "")
+
+
+def validate_graph(graph: ig.Graph) -> ValidationResult:
+    """Validate a graph for building."""
+
+    if not graph.is_dag:
+        return ValidationResult(False, "The graph is not a DAG.")
+    if not graph.is_connected(mode="WEAK"):
+        return ValidationResult(False, "The graph is not connected.")
+    if graph_has_successive_variation_node(graph):
+        return ValidationResult(False, "The graph has successive variation nodes.")
+    return ValidationResult(True, "")
+
+
+def graph_has_successive_variation_node(graph: ig.Graph) -> bool:
+    for node in graph.vs:
+        if is_variation_node(node, graph):
+            pr = graph.neighbors(node, mode="in")[0]
+            sr = graph.neighbors(node, mode="out")[0]
+            if is_variation_node(pr, graph) or is_variation_node(sr, graph):
+                return True
+    return False
+
+
+def is_variation_node(node: ig.Vertex, graph: ig.Graph) -> bool:
+    """Check if a node is a variation node."""
+
+    if graph.degree(node, mode="in") == 1 and graph.degree(node, mode="out") == 1:
+        return True
+    return False
+
+
+def unvisited_path(
+    start_node: int, graph: ig.Graph, visited_nodes: set, path_starts: collections.deque
+):
+    """
+    Returns a generator of an unvisited path the `start_node` belongs to. Each
+    node in the path is unvisited, and the path's predecessor & successor are
+    both visited or empty.
+
+    When encounter node with multiple successors, proceed with one of them and
+    move the remainder to `path_starts`.
+    """
+
+    next = start_node
+    while next != None:
+        yield next
+        successors = graph.neighbors(next, mode="out")
+        next = None
+        if successors:
+            for sr in successors:
+                if sr not in visited_nodes:
+                    if next != None:
+                        path_starts.append(sr)
+                    else:
+                        next = sr
+
+
+def process_path(
+    start_node: int,
+    graph: ig.Graph,
+    regions: pd.DataFrame,
+    segments: pd.DataFrame,
+    visited_nodes: set,
+    path_starts: collections.deque,
+    paths: list[list[int]],
+):
+    """Traverse and process an independant path."""
+
+    g = graph
+    rt = regions
+    st = segments
+    start = start_node
+    visited = visited_nodes
+    haplotypes = g["haplotypes"].split(",")
+
+    # Init the path based on traverse order
+    # If is main path
+    if g.vs[start]["name"] == "head":
+        region = Region(get_id("r"), "con")
+        region.sources = haplotypes
+        segment = Segment(get_id("s"), original=False)
+        segment.is_wrapper = True
+
+    # or side path
+    else:
+        predecessors = g.neighbors(start, mode="in")
+        befores = [p for p in predecessors if p in visited]
+        if len(befores) > 1:
+            raise DataInvalidError(
+                "Unable to resolve complex graph structure. Flatten the graph and rerun."
+            )
+        else:
+            before = befores[0]  # TODO: eliminate multiple attachment relations
+
+        # Split into regions if hasn't been treated
+        if rt[rt["before"] == g.vs[before]["name"]].empty:
+            # Get parent segment's properties
+            parseg_id = g.vs[before]["parent_segment"]
+            pi = st[st["id"] == parseg_id].index[0]
+            level = st.iat[pi, st.columns.get_loc("level_range")][0] + 1
+            sub_regions = st.iat[pi, st.columns.get_loc("sub_regions")]
+            sources = copy.deepcopy(st.iat[pi, st.columns.get_loc("sources")])
+
+            # Build elements and fill properties
+            if g.vs[before]["name"] != "head":
+                # TODO: change to support consensus bead that contain more than one node
+                previous_region = Region(get_id("r"), "con")
+                previous_region.level_range = [level, level]
+                previous_region.sources = sources
+                previous_seg = previous_region.add_segment(g.vs[before]["name"])
+                previous_seg.length = g.vs[before]["length"]
+                previous_seg.frequency = len(previous_seg.sources) / len(haplotypes)
+                previous_region.parent_segment = parseg_id
+                # write to dataframe
+                st = pd.concat(
+                    [st, pd.DataFrame([previous_seg.to_dict()])],
+                    ignore_index=True,
+                    copy=False,
+                )
+                rt = pd.concat(
+                    [rt, pd.DataFrame([previous_region.to_dict()])],
+                    ignore_index=True,
+                    copy=False,
+                )
+                sub_regions.append(previous_region.id)
+            region = Region(get_id("r"), "var")
+            segment = Segment(get_id("s"), original=False)
+            segment.level_range = region.level_range = [level, level]
+            g.vs[before]["parent_segment"] = None  # "before" can't be accessed anymore
+            region.parent_segment = parseg_id
+            region.sources = sources
+            region.before = g.vs[before]["name"]
+            sub_regions.append(region.id)
+            # suspend current region dumping (to df) for potential updates
+
+        # or add segment to existing region
+        else:
+            region_dict = rt[rt["before"] == g.vs[before]["name"]].iloc[0].to_dict()
+            segment = Segment(get_id("s"), original=False)
+            region = Region(region_dict["id"], region_dict["type"])
+            region.from_dict(region_dict)
+            segment.level_range = region.level_range
+            level = region.level_range[0]
+
+    # Generate current path & process its nodes
+    path = []
+    for node in unvisited_path(start, g, visited, path_starts):
+        visited.add(node)
+        path.append(node)
+        # if run across del site
+        while node in path_starts:
+            # find the farther predecessor
+            # other = None
+            for predecessor in g.neighbors(node, mode="in"):
+                if predecessor in visited and predecessor != last:
+                    s = predecessor
+                    break
+                    # if other == None:
+                    #     other = pr
+                    #     otherspaths = g.get_all_simple_paths(pr, node)
+                    # else:
+                    #     s = pr
+                    #     for path in otherspaths:
+                    #         if pr in path:
+                    #             s = other
+                    #             break
+            if not s:
+                raise DataInvalidError(
+                    "Unable to resolve complex graph structure. Flatten the graph and rerun."
+                )
+
+            del_node = g.add_vertex(get_id("s"), length=0).index
+            g.vs[del_node]["sources"] = []
+            g.vs[del_node]["frequency"] = 0
+            g.add_edges([(s, del_node), (del_node, node)])
+            g.delete_edges((s, node))
+            ni = path_starts.index(node)
+            path_starts.insert(ni, del_node)
+            path_starts.remove(node)
+        g.vs[node]["parent_segment"] = segment.id
+        g.vs[node]["path"] = len(paths)
+        if g.vs[node]["name"] != "head" and g.vs[node]["name"] != "tail":
+            segment.sources = list(set().union(segment.sources, g.vs[node]["sources"]))
+            segment.frequency = max(segment.frequency, g.vs[node]["frequency"])
+        last = node
+
+    # Rewrite properties if no `sub_regions` would be found
+    if len(path) == 1:
+        ni = path[0]
+        segment.id = g.vs[ni]["name"]
+        segment.length = g.vs[ni]["length"]
+        segment.original_id = None
+        g.vs[ni][
+            "parent_segment"
+        ] = None  # inseperable segment has no `parent_segment` record, a flag for leaves
+        g.vs[ni]["path"] = None
+    else:
+        paths.append(path)
+        segment.is_wrapper = True
+    region.segments.append(segment.id)
+    segment_df = pd.DataFrame([segment.to_dict()])
+    if st.empty:
+        st = segment_df
+    else:
+        st = pd.concat([st, segment_df], ignore_index=True, copy=False)
+
+    # Process allele region if have
+    if g.vs[start]["name"] != "head":
+        # Find allele path
+        pi = g.vs[before]["path"]
+        origin_path = paths[pi]
+        b = origin_path.index(before)
+        successors = g.neighbors(node, mode="out")
+        afters = [s for s in successors if s in visited]
+        if len(afters) > 1:
+            raise DataInvalidError(
+                "Unable to resolve complex graph structure. Flatten the graph and rerun."
+            )
+        af = afters[0]
+        region.after = g.vs[af]["name"]  # TODO: eliminate multiple attachment relations
+        a = origin_path.index(af)
+        if b < a:
+            origin_allele_path = origin_path[b + 1 : a]
+
+        # Build allele segment
+        if not origin_allele_path:  # allele is del
+            del_node = g.add_vertex(
+                get_id("s"), length=0
+            ).index  # NOTE: `d` node isn't added to origin path
+            g.vs[del_node]["sources"] = []
+            g.vs[del_node]["frequency"] = 0
+            g.add_edges([(before, del_node), (del_node, af)])
+            g.delete_edges((before, af))
+            visited.add(del_node)
+            origin_allele_path = [del_node]
+        if len(origin_allele_path) == 1:
+            origin_allele_node = origin_allele_path[0]
+            allele_segment = Segment(g.vs[origin_allele_node]["name"])
+            allele_segment.length = g.vs[origin_allele_node]["length"]
+            allele_segment.frequency = g.vs[origin_allele_node]["frequency"]
+            allele_segment.sources = g.vs[origin_allele_node]["sources"]
+            g.vs[origin_allele_node]["parent_segment"] = None
+        else:
+            allele_segment = Segment(get_id("s"), original=False)
+            allele_segment.is_wrapper = True
+            for node in origin_allele_path:
+                g.vs[node][
+                    "parent_segment"
+                ] = allele_segment.id  # Update parent for separable nodes
+                allele_segment.sources = list(
+                    set().union(allele_segment.sources, g.vs[node]["sources"])
+                )
+                allele_segment.frequency = max(
+                    allele_segment.frequency, g.vs[node]["frequency"]
+                )
+
+        allele_segment.level_range = [level, level]
+        region.segments.append(allele_segment.id)
+        st = pd.concat(
+            [st, pd.DataFrame([allele_segment.to_dict()])],
+            ignore_index=True,
+            copy=False,
+        )
+
+    rt = pd.concat(
+        [rt, pd.DataFrame([region.to_dict()])], ignore_index=True, copy=False
+    )
+    return rt, st
 
 
 def graph2rstree(graph: ig.Graph):
     """Build a region-segment tree for pangenome representation from a normalized sequence graph."""
 
+    # if examine_complex_graph(graph):
+    #     raise DataInvalidError(
+    #         "Part of the graph doesn't fit the structure of a pangenome graph."
+    #     )
+
     # Inits
-    visited = set()
-    pathstarts = collections.deque()
+    visited_nodes = set()
+    path_starts = collections.deque()
     paths = []
     meta = {"sources": graph["haplotypes"].split(",")}
     rt = pd.DataFrame(
         columns=[
             "id",
-            "name",
-            "range",
-            "parent_seg",
-            "segments",
+            "semantic_id",
             "level_range",
-            "length",
+            "coordinate",
             "is_default",
-            "sources",
-            "is_var",
+            "length",
+            "is_variant",
             "type",
-            "total_var",
+            "total_variants",
+            "subgraph",
+            "parent_segment",
+            "segments",
+            "sources",
             "min_length",
             "before",
             "after",
@@ -129,45 +373,59 @@ def graph2rstree(graph: ig.Graph):
     st = pd.DataFrame(
         columns=[
             "id",
-            "name",
-            "range",
-            "sub_regions",
+            "original_id",
+            "semantic_id",
             "level_range",
-            "length",
+            "coordinate",
             "rank",
+            "length",
             "frequency",
-            "sources",
-            "dir_var",
-            "total_var",
+            "direct_variants",
+            "total_variants",
             "is_wrapper",
+            "sub_regions",
+            "sources",
         ]
     )
-    empstart = graph.vs.find("start").index
-    pathstarts.append(empstart)
+    try:
+        head = graph.vs.find("head").index
+    except ValueError:
+        head = graph.add_vertex("head", length=0).index
+    for start in graph.vs.select(_indegree=0):
+        if not graph.are_connected(head, start.index):
+            graph.add_edges([(head, start.index)])
+    try:
+        tail = graph.vs.find("tail").index
+    except ValueError:
+        tail = graph.add_vertex("tail", length=0).index
+    for end in graph.vs.select(_outdegree=0):
+        if not graph.are_connected(end.index, tail):
+            graph.add_edges([(end.index, tail)])
+    path_starts.append(head)
 
     # Traversing the graph
-    while len(pathstarts) != 0:
-        start = pathstarts.popleft()
-        rt, st = process_path(start, graph, rt, st, visited, pathstarts, paths)
+    while len(path_starts) != 0:
+        start = path_starts.popleft()
+        rt, st = process_path(start, graph, rt, st, visited_nodes, path_starts, paths)
 
     # Postprocess
     # Turn the nodes at segment end into each split region
-    segends = graph.vs.select(parent_seg_ne=None)
+    segends = graph.vs.select(parent_segment_ne=None)
     for se in segends:
-        if se["name"] != "end" and se["name"] != "start":
+        if se["name"] != "tail" and se["name"] != "head":
             # get current level
-            parseg_id = se["parent_seg"]
+            parseg_id = se["parent_segment"]
             pi = st[st["id"] == parseg_id].index[0]
             level = st.iat[pi, st.columns.get_loc("level_range")][0] + 1
 
             # build elements and fill properties
-            region = Region(_get_id("r"), "con")
+            region = Region(get_id("r"), "con")
             region.level_range = [level, level]
             region.sources = copy.deepcopy(st.iat[pi, st.columns.get_loc("sources")])
             segment = region.add_segment(se["name"])
             segment.length = se["length"]
             segment.frequency = len(segment.sources) / len(meta["sources"])
-            region.parent_seg = parseg_id
+            region.parent_segment = parseg_id
 
             # write to dataframe
             subrg = st.iat[pi, st.columns.get_loc("sub_regions")]
@@ -178,16 +436,17 @@ def graph2rstree(graph: ig.Graph):
             rt = pd.concat(
                 [rt, pd.DataFrame([region.to_dict()])], ignore_index=True, copy=False
             )
-        graph.vs[se.index]["parent_seg"] = None
+        graph.vs[se.index]["parent_segment"] = None
     st = st.astype(
         {
             "id": "string",
-            "name": "string",
-            "length": "uint64",
+            "original_id": "string",
+            "semantic_id": "string",
             "rank": "uint8",
+            "length": "uint64",
             "frequency": "float16",
-            "dir_var": "uint8",
-            "total_var": "uint64",
+            "direct_variants": "uint8",
+            "total_variants": "uint64",
             "is_wrapper": "bool",
         },
         copy=False,
@@ -195,13 +454,14 @@ def graph2rstree(graph: ig.Graph):
     rt = rt.astype(
         {
             "id": "string",
-            "name": "string",
-            "parent_seg": "string",
-            "length": "uint64",
+            "semantic_id": "string",
             "is_default": "bool",
-            "is_var": "bool",
+            "length": "uint64",
+            "is_variant": "bool",
             "type": "string",
-            "total_var": "uint64",
+            "total_variants": "uint64",
+            "subgraph": "string",
+            "parent_segment": "string",
             "min_length": "uint64",
             "before": "string",
             "after": "string",
@@ -272,12 +532,12 @@ def calculate_properties_l2r(rt: pd.DataFrame, st: pd.DataFrame, meta: dict):
             rt.iat[ri, rt.columns.get_loc("length")] = maxlen
             rt.iat[ri, rt.columns.get_loc("min_length")] = lensr[lensr > 0].min()
 
-            # fill `total_var`
-            rt.iat[ri, rt.columns.get_loc("total_var")] = st.iloc[sis][
-                "total_var"
+            # fill `total_variants`
+            rt.iat[ri, rt.columns.get_loc("total_variants")] = st.iloc[sis][
+                "total_variants"
             ].sum()
 
-            # fill region & segment's `name`
+            # fill region & segment's `semantic_id`
             if len(segments) > 1:  # variant exists
                 d = maxlen - minlen
                 std = lensr.std()
@@ -287,12 +547,12 @@ def calculate_properties_l2r(rt: pd.DataFrame, st: pd.DataFrame, meta: dict):
                 if std / mean < 0.1:
                     if (lensr == 1).all():
                         rt.iat[ri, rt.columns.get_loc("type")] = "snp"
-                        rn = _get_id("snp")
+                        rn = get_id("snp")
                     else:
                         rt.iat[ri, rt.columns.get_loc("type")] = "ale"
-                        rn = _get_id("ale")
-                    rt.iat[ri, rt.columns.get_loc("name")] = rn
-                    st.iloc[sis, st.columns.get_loc("name")] = [
+                        rn = get_id("ale")
+                    rt.iat[ri, rt.columns.get_loc("semantic_id")] = rn
+                    st.iloc[sis, st.columns.get_loc("semantic_id")] = [
                         rn + "-" + chr(j) for j in range(97, 97 + len(sis))
                     ]  # generate names like `ALE-{n}-a,b,c`
 
@@ -303,35 +563,35 @@ def calculate_properties_l2r(rt: pd.DataFrame, st: pd.DataFrame, meta: dict):
                     ].min()
                     if d > 50:
                         rt.iat[ri, rt.columns.get_loc("type")] = "sv"
-                        rn = _get_id("sv")
+                        rn = get_id("sv")
                     else:
                         rt.iat[ri, rt.columns.get_loc("type")] = "ind"
-                        rn = _get_id("ind")
-                    rt.iat[ri, rt.columns.get_loc("name")] = rn
+                        rn = get_id("ind")
+                    rt.iat[ri, rt.columns.get_loc("semantic_id")] = rn
                     mini = lensr.idxmin()
-                    st.iat[mini, st.columns.get_loc("name")] = rn + "-d"
+                    st.iat[mini, st.columns.get_loc("semantic_id")] = rn + "-d"
                     sis.remove(mini)
                     if len(sis) > 1:
-                        st.iloc[sis, st.columns.get_loc("name")] = [
+                        st.iloc[sis, st.columns.get_loc("semantic_id")] = [
                             rn + "-i" + chr(j) for j in range(97, 97 + len(sis))
                         ]
                     else:
-                        st.iloc[sis, st.columns.get_loc("name")] = rn + "-i"
+                        st.iloc[sis, st.columns.get_loc("semantic_id")] = rn + "-i"
 
                 # not determined
                 else:
                     rt.iat[ri, rt.columns.get_loc("type")] = "var"
-                    rn = _get_id("var")
-                    rt.iat[ri, rt.columns.get_loc("name")] = rn
-                    st.iloc[sis, st.columns.get_loc("name")] = [
+                    rn = get_id("var")
+                    rt.iat[ri, rt.columns.get_loc("semantic_id")] = rn
+                    st.iloc[sis, st.columns.get_loc("semantic_id")] = [
                         rn + "-" + chr(j) for j in range(97, 97 + len(sis))
                     ]
 
             # consensus
             else:
-                rn = _get_id("con")
-                rt.iat[ri, rt.columns.get_loc("name")] = rn
-                st.iloc[sis, st.columns.get_loc("name")] = rn
+                rn = get_id("con")
+                rt.iat[ri, rt.columns.get_loc("semantic_id")] = rn
+                st.iloc[sis, st.columns.get_loc("semantic_id")] = rn
 
         if i >= 1:
             sis = st[
@@ -346,254 +606,39 @@ def calculate_properties_l2r(rt: pd.DataFrame, st: pd.DataFrame, meta: dict):
                 totallen = srdf["length"].sum()
                 segment["length"] = totallen
 
-                # fill `dir_var` & `total_var`
-                segment["dir_var"] = len(srdf[srdf["type"] != "con"])
-                segment["total_var"] = srdf["total_var"].sum() + segment["dir_var"]
+                # fill `direct_variants` & `total_variants`
+                segment["direct_variants"] = len(srdf[srdf["type"] != "con"])
+                segment["total_variants"] = (
+                    srdf["total_variants"].sum() + segment["direct_variants"]
+                )
 
                 st.iloc[si] = segment
 
     return rt, st, meta
 
 
-def unvisited_path(
-    start: int, graph: ig.Graph, visited: set, pathstarts: collections.deque
+def wrap_rstree(
+    regions: pd.DataFrame,
+    segments: pd.DataFrame,
+    meta: dict,
+    min_resolution=0.04,
 ):
-    """
-    Returns a generator of an unvisited path the `start` node belongs to. Each
-    node in the path is unvisited, and the path's predecessor & successor are
-    both visited or empty.
-
-    When encounter node with multiple successors, proceed with one of them and
-    move the remainder to `pathstarts`.
-    """
-
-    next = start
-    while next != None:
-        yield next
-        successors = graph.neighbors(next, mode="out")
-        next = None
-        if successors:
-            for sr in successors:
-                if sr not in visited:
-                    if next != None:
-                        pathstarts.append(sr)
-                    else:
-                        next = sr
-
-
-def process_path(
-    start: int,
-    graph: ig.Graph,
-    rt: pd.DataFrame,
-    st: pd.DataFrame,
-    visited: set,
-    pathstarts: collections.deque,
-    paths: list[list[int]],
-):
-    """Traverse and process an independant path."""
-
-    g = graph
-    haps = g["haplotypes"].split(",")
-
-    # Init the path based on traverse order
-    # If is main path
-    if g.vs[start]["name"] == "start":
-        region = Region(_get_id("r"), "con")
-        region.sources = haps
-        segment = Segment(_get_id("s"))
-        segment.is_wrapper = True
-
-    # or side path
-    else:
-        predecessors = g.neighbors(start, mode="in")
-        if len(predecessors) > 1:
-            raise ValueError(
-                "Unable to resolve complex graph structure. Flatten the graph and rerun."
-            )
-        else:
-            before = predecessors[0]  # TODO: eliminate multiple attachment relations
-
-        # Split into regions if hasn't been treated
-        if rt[rt["before"] == g.vs[before]["name"]].empty:
-            # Get parent segment's properties
-            parseg_id = g.vs[before]["parent_seg"]
-            pi = st[st["id"] == parseg_id].index[0]
-            level = st.iat[pi, st.columns.get_loc("level_range")][0] + 1
-            subrg = st.iat[pi, st.columns.get_loc("sub_regions")]
-            sources = copy.deepcopy(st.iat[pi, st.columns.get_loc("sources")])
-
-            # Build elements and fill properties
-            if g.vs[before]["name"] != "start":
-                # TODO: change to support consensus bead that contain more than one node
-                pre_region = Region(_get_id("r"), "con")
-                pre_region.level_range = [level, level]
-                pre_region.sources = sources
-                pre_seg = pre_region.add_segment(g.vs[before]["name"])
-                pre_seg.length = g.vs[before]["length"]
-                pre_seg.frequency = len(pre_seg.sources) / len(haps)
-                pre_region.parent_seg = parseg_id
-                # write to dataframe
-                st = pd.concat(
-                    [st, pd.DataFrame([pre_seg.to_dict()])],
-                    ignore_index=True,
-                    copy=False,
-                )
-                rt = pd.concat(
-                    [rt, pd.DataFrame([pre_region.to_dict()])],
-                    ignore_index=True,
-                    copy=False,
-                )
-                subrg.append(pre_region.id)
-            region = Region(_get_id("r"), "var")
-            segment = Segment(_get_id("s"))
-            segment.level_range = region.level_range = [level, level]
-            g.vs[before]["parent_seg"] = None  # "before" can't be accessed anymore
-            region.parent_seg = parseg_id
-            region.sources = sources
-            region.before = g.vs[before]["name"]
-            subrg.append(region.id)
-            # suspend current region dumping (to df) for potential updates
-
-        # or add segment to existing region
-        else:
-            rg_dict = rt[rt["before"] == g.vs[before]["name"]].iloc[0].to_dict()
-            segment = Segment(_get_id("s"))
-            region = Region(rg_dict["id"], rg_dict["type"])
-            region.from_dict(rg_dict)
-            segment.level_range = region.level_range
-            level = region.level_range[0]
-
-    # Generate current path & process its nodes
-    path = []
-    for node in unvisited_path(start, g, visited, pathstarts):
-        visited.add(node)
-        path.append(node)
-        # if run across del site
-        if node in pathstarts:
-            # find the farther predecessor
-            # other = None
-            for pr in g.neighbors(node, mode="in"):
-                if pr in visited and pr != last:
-                    s = pr
-                    break
-                    # if other == None:
-                    #     other = pr
-                    #     otherspaths = g.get_all_simple_paths(pr, node)
-                    # else:
-                    #     s = pr
-                    #     for path in otherspaths:
-                    #         if pr in path:
-                    #             s = other
-                    #             break
-            if not s:
-                raise ValueError(
-                    "Unable to resolve complex graph structure. Flatten the graph and rerun."
-                )
-
-            d = g.add_vertex(_get_id("s"), length=0).index
-            g.vs[d]["sources"] = []
-            g.vs[d]["frequency"] = 0
-            g.add_edges([(s, d), (d, node)])
-            g.delete_edges((s, node))
-            ni = pathstarts.index(node)
-            pathstarts.insert(ni, d)
-            pathstarts.remove(node)
-        g.vs[node]["parent_seg"] = segment.id
-        g.vs[node]["path"] = len(paths)
-        if g.vs[node]["name"] != "start" and g.vs[node]["name"] != "end":
-            segment.sources = list(set().union(segment.sources, g.vs[node]["sources"]))
-            segment.frequency = max(segment.frequency, g.vs[node]["frequency"])
-        last = node
-
-    # Rewrite properties if no `sub_regions` would be found
-    if len(path) == 1:
-        ni = path[0]
-        segment.id = g.vs[ni]["name"]
-        segment.length = g.vs[ni]["length"]
-        g.vs[ni][
-            "parent_seg"
-        ] = None  # inseperable segment has no `parent_seg` record, a flag for leaves
-        g.vs[ni]["path"] = None
-    else:
-        paths.append(path)
-        segment.is_wrapper = True
-    region.segments.append(segment.id)
-    segdf = pd.DataFrame([segment.to_dict()])
-    if st.empty:
-        st = segdf
-    else:
-        st = pd.concat([st, segdf], ignore_index=True, copy=False)
-
-    # Process allele region if have
-    if g.vs[start]["name"] != "start":
-        # Find allele path
-        pi = g.vs[before]["path"]
-        org_path = paths[pi]
-        b = org_path.index(before)
-        successors = g.neighbors(node, mode="out")
-        afters = [s for s in successors if s in visited]
-        if len(afters) > 1:
-            raise ValueError(
-                "Unable to resolve complex graph structure. Flatten the graph and rerun."
-            )
-        af = afters[0]
-        region.after = g.vs[af]["name"]  # TODO: eliminate multiple attachment relations
-        a = org_path.index(af)
-        if b < a:
-            org_ale_path = org_path[b + 1 : a]
-
-        # Build allele segment
-        if not org_ale_path:  # allele is del
-            d = g.add_vertex(
-                _get_id("s"), length=0
-            ).index  # NOTE: `d` node isn't added to origin path
-            g.vs[d]["sources"] = []
-            g.vs[d]["frequency"] = 0
-            g.add_edges([(before, d), (d, af)])
-            g.delete_edges((before, af))
-            visited.add(d)
-            org_ale_path = [d]
-        if len(org_ale_path) == 1:
-            org_ale_node = org_ale_path[0]
-            ale_seg = Segment(g.vs[org_ale_node]["name"])
-            ale_seg.length = g.vs[org_ale_node]["length"]
-            ale_seg.frequency = g.vs[org_ale_node]["frequency"]
-            ale_seg.sources = g.vs[org_ale_node]["sources"]
-            g.vs[org_ale_node]["parent_seg"] = None
-        else:
-            ale_seg = Segment(_get_id("s"))
-            ale_seg.is_wrapper = True
-            for n in org_ale_path:
-                g.vs[n]["parent_seg"] = ale_seg.id  # Update parent for separable nodes
-                ale_seg.sources = list(set().union(ale_seg.sources, g.vs[n]["sources"]))
-                ale_seg.frequency = max(ale_seg.frequency, g.vs[n]["frequency"])
-
-        ale_seg.level_range = [level, level]
-        region.segments.append(ale_seg.id)
-        st = pd.concat(
-            [st, pd.DataFrame([ale_seg.to_dict()])], ignore_index=True, copy=False
-        )
-
-    rt = pd.concat(
-        [rt, pd.DataFrame([region.to_dict()])], ignore_index=True, copy=False
-    )
-    return rt, st
-
-
-def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, meta: dict, minres=0.04):
     """Wrap small regions, deepen the region-segment tree and establish hierarchy."""
 
-    if minres <= 0:
+    rt = regions
+    st = segments
+
+    if min_resolution <= 0:
         raise ValueError("Min resolution must be greater than 0.")
-    totallen = rt[rt["level_range"].apply(lambda lr: lr[0] == 0 and lr[1] == 0)][
+    total_length = rt[rt["level_range"].apply(lambda lr: lr[0] == 0 and lr[1] == 0)][
         "length"
     ].iloc[0]
-    maxlevel = math.ceil(
-        math.log2(totallen / 1000 / minres)
+    max_level = math.ceil(
+        math.log2(total_length / 1000 / min_resolution)
     )  # new max level for hierarchical graph
-    meta["max_level"] = maxlevel
-    meta["total_length"] = int(totallen)
-    minlenpx = 1 / minres
+    meta["max_level"] = max_level
+    meta["total_length"] = int(total_length)
+    min_length_px = 1 / min_resolution
     # clear old level ranges
     mask = rt["level_range"].apply(lambda lr: lr[1] > 1)
     rt.loc[mask, "level_range"] = rt.loc[mask, "level_range"].apply(lambda lr: [])
@@ -601,16 +646,16 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, meta: dict, minres=0.04):
     st.loc[mask, "level_range"] = st.loc[mask, "level_range"].apply(lambda lr: [])
 
     # Traverse the hierarchical graph from top to bottom
-    for i in range(1, maxlevel):  # exclude top & bottom layer
-        res = 2 ** (maxlevel - i) * minres
-        rmdregions = set(
+    for i in range(1, max_level):  # exclude top & bottom layer
+        resolution = 2 ** (max_level - i) * min_resolution
+        remaining_regions = set(
             rt[
                 rt["level_range"].apply(
                     lambda lr: len(lr) > 0 and i >= lr[0] and i <= lr[1]
                 )
             ]["id"].to_list()
         )
-        parseg_df = st[
+        parent_segment_table = st[
             st["level_range"].apply(
                 lambda lr: len(lr) > 0 and i - 1 >= lr[0] and i - 1 <= lr[1]
             )
@@ -618,10 +663,10 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, meta: dict, minres=0.04):
         ]
 
         # Treat regions in each parent segment seperately
-        for rid_list in copy.deepcopy(parseg_df["sub_regions"].to_list()):
-            rmdregions.difference_update(set(rid_list))
+        for rid_list in copy.deepcopy(parent_segment_table["sub_regions"].to_list()):
+            remaining_regions.difference_update(set(rid_list))
             ris = rt[rt["id"].isin(rid_list)].index.to_list()
-            r2bw_iranges_dq = collections.deque()
+            r2bw_iranges_dq = collections.deque()  # "r2bw" = "regions to be wrapped"
             normal_regions = set(rid_list)
             for ri in ris:
                 region = rt.iloc[ri].to_dict()
@@ -629,12 +674,12 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, meta: dict, minres=0.04):
                 #     continue
 
                 # Add wrapper nodes if one of its segment's length is too small
-                if region["min_length"] < res * minlenpx:
+                if region["min_length"] < resolution * min_length_px:
                     # Extend to find proper wrapping range
                     posi = rid_list.index(region["id"])
                     b = a = posi
-                    totallen = 0
-                    while totallen < res * minlenpx and not (
+                    total_length = 0
+                    while total_length < resolution * min_length_px and not (
                         b < 0 and a > len(rid_list) - 1
                     ):  # continue extending if wrapped region still too small
                         if b >= 1:
@@ -657,7 +702,7 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, meta: dict, minres=0.04):
                             a = len(rid_list)
                         r2bw_ids = rid_list[b + 1 : a]
                         r2bw_df = rt[rt["id"].isin(r2bw_ids)]
-                        totallen = r2bw_df["length"].sum()
+                        total_length = r2bw_df["length"].sum()
 
                     r2bw_iranges_dq.append([b + 1, a - 1])
                     # del rid_list[b + 1 : a]
@@ -677,7 +722,7 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, meta: dict, minres=0.04):
                         last = current
             r2bw_iranges.append(last)
 
-            si = st[st["id"] == region["parent_seg"]].index.to_list()[0]
+            si = st[st["id"] == region["parent_segment"]].index.to_list()[0]
 
             # move parent segment to current layer if all its child regions are wrapped into one
             if (
@@ -685,8 +730,8 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, meta: dict, minres=0.04):
                 and r2bw_iranges[0][0] == 0
                 and r2bw_iranges[0][1] == len(rid_list) - 1
             ):
-                lvlrg = st.iat[si, st.columns.get_loc("level_range")]
-                lvlrg[1] = i  # NOTE: update df cell in place
+                level_range = st.iat[si, st.columns.get_loc("level_range")]
+                level_range[1] = i  # NOTE: update df cell in place
                 mask = rt["id"].isin(rid_list)
                 rt.loc[mask, "level_range"] = rt.loc[mask, "level_range"].apply(
                     lambda lr: [i + 1, i + 1]
@@ -703,30 +748,30 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, meta: dict, minres=0.04):
             for irange in r2bw_iranges:
                 r2bw_ids = rid_list[irange[0] : irange[1] + 1]
                 r2bw_df = rt[rt["id"].isin(r2bw_ids)]
-                totallen = r2bw_df["length"].sum()
+                total_length = r2bw_df["length"].sum()
                 normal_regions.difference_update(set(r2bw_ids))
 
                 # build wrapper elements and fill properties
-                wrap_region = Region(_get_id("r"), "con")
+                wrap_region = Region(get_id("r"), "con")
                 wrap_region.level_range = [i, i]
                 wrap_region.sources = copy.deepcopy(
                     st.iat[si, st.columns.get_loc("sources")]
                 )
-                wrap_segment = wrap_region.add_segment(_get_id("s"))
+                wrap_segment = wrap_region.add_segment(get_id("s"))
                 wrap_region.length = wrap_region.min_length = wrap_segment.length = (
-                    totallen
+                    total_length
                 )
                 wrap_segment.frequency = len(wrap_segment.sources) / len(
                     meta["sources"]
                 )
                 wrap_segment.is_wrapper = True
-                wrap_segment.name = wrap_region.name = _get_id("con")
-                wrap_segment.dir_var = len(r2bw_df[r2bw_df["is_var"]])
-                wrap_segment.total_var = (
-                    r2bw_df["total_var"].sum() + wrap_segment.dir_var
+                wrap_segment.semantic_id = wrap_region.semantic_id = get_id("con")
+                wrap_segment.direct_variants = len(r2bw_df[r2bw_df["is_variant"]])
+                wrap_segment.total_variants = (
+                    r2bw_df["total_variants"].sum() + wrap_segment.direct_variants
                 )
-                wrap_region.total_var = wrap_segment.total_var
-                wrap_region.parent_seg = region["parent_seg"]
+                wrap_region.total_variants = wrap_segment.total_variants
+                wrap_region.parent_segment = region["parent_segment"]
                 wrap_segment.sub_regions = r2bw_ids
 
                 # write to dataframe
@@ -734,13 +779,14 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, meta: dict, minres=0.04):
                 wr_df = wr_df.astype(
                     {
                         "id": "string",
-                        "name": "string",
-                        "parent_seg": "string",
-                        "length": "uint64",
+                        "semantic_id": "string",
                         "is_default": "bool",
-                        "is_var": "bool",
+                        "length": "uint64",
+                        "is_variant": "bool",
                         "type": "string",
-                        "total_var": "uint64",
+                        "total_variants": "uint64",
+                        "subgraph": "string",
+                        "parent_segment": "string",
                         "min_length": "uint64",
                         "before": "string",
                         "after": "string",
@@ -751,12 +797,13 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, meta: dict, minres=0.04):
                 ws_df = ws_df.astype(
                     {
                         "id": "string",
-                        "name": "string",
-                        "length": "uint64",
+                        "original_id": "string",
+                        "semantic_id": "string",
                         "rank": "uint8",
+                        "length": "uint64",
                         "frequency": "float16",
-                        "dir_var": "uint8",
-                        "total_var": "uint64",
+                        "direct_variants": "uint8",
+                        "total_variants": "uint64",
                         "is_wrapper": "bool",
                     },
                     copy=False,
@@ -771,7 +818,7 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, meta: dict, minres=0.04):
 
                 # Move wrapped elements to next layer
                 mask = rt["id"].isin(r2bw_ids)
-                rt.loc[mask, "parent_seg"] = wrap_segment.id
+                rt.loc[mask, "parent_segment"] = wrap_segment.id
                 rt.loc[mask, "level_range"] = rt.loc[mask, "level_range"].apply(
                     lambda lr: [i + 1, i + 1]
                 )
@@ -783,7 +830,7 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, meta: dict, minres=0.04):
 
             if len(r2bw_iranges) > 0:
                 rid_list = [rid for rid in rid_list if rid]
-                si = st[st["id"] == wrap_region.parent_seg].index.to_list()[0]
+                si = st[st["id"] == wrap_region.parent_segment].index.to_list()[0]
                 st.iat[si, st.columns.get_loc("sub_regions")] = rid_list
 
             for rid in normal_regions:
@@ -814,82 +861,497 @@ def wrap_rstree(rt: pd.DataFrame, st: pd.DataFrame, meta: dict, minres=0.04):
                     )
 
         # Copy inherited elements directly to next layer
-        ris = rt[rt["id"].isin(rmdregions)].index.to_list()
+        ris = rt[rt["id"].isin(remaining_regions)].index.to_list()
         for ri in ris:
             segments = rt.iloc[ri]["segments"]
             sis = st[st["id"].isin(segments)].index.to_list()
-            lvlrg = rt.iat[ri, rt.columns.get_loc("level_range")]
-            lvlrg[1] = i + 1  # NOTE: update df cell in place
+            level_range = rt.iat[ri, rt.columns.get_loc("level_range")]
+            level_range[1] = i + 1  # NOTE: update df cell in place
             st.iloc[sis, st.columns.get_loc("level_range")] = st.iloc[
                 sis, st.columns.get_loc("level_range")
-            ].apply(lambda lr: lvlrg)
+            ].apply(lambda lr: level_range)
 
     # TODO: Find algorithm to unwrap all elements within max level limit
     if len(rt[rt["level_range"].apply(lambda lr: len(lr) == 0)]) > 0:
-        raise Exception(
+        raise InternalError(
             "Warning: There are small regions remain wrapped, to unwrap all regions, flatten your input graph or decrease `minres`."
         )
+
+    root_region = rt[rt["parent_segment"].isna()].iloc[0].to_dict()
+    meta["total_variants"] = root_region["total_variants"]
 
     return rt, st, meta
 
 
-def calculate_properties_r2l(rt: pd.DataFrame, st: pd.DataFrame, meta: dict):
+def calculate_properties_r2l(regions: pd.DataFrame, segments: pd.DataFrame, meta: dict):
     """Calculates the properties for elements from root to leaves in the region-segment tree."""
 
+    rt = regions
+    st = segments
+
     # from root to leave
-    root_ri = rt[rt["parent_seg"].isna()].index.to_list()[0]
+    root_ri = rt[rt["parent_segment"].isna()].index.to_list()[0]
     root_rid = rt.iat[root_ri, rt.columns.get_loc("id")]
 
     # bootstrap properties for root region & segment
     totallen = meta["total_length"]
-    rt.iat[root_ri, rt.columns.get_loc("range")] = [0, totallen]  # range index
+    rt.iat[root_ri, rt.columns.get_loc("coordinate")] = [
+        0,
+        totallen,
+    ]  # coordinate index
     rt.iat[root_ri, rt.columns.get_loc("is_default")] = True  # default on display
-    reg_dq = collections.deque([root_rid])
+    region_deque = collections.deque([root_rid])
 
-    while len(reg_dq) > 0:
-        regid = reg_dq.popleft()
-        parreg: dict = rt[rt["id"] == regid].iloc[0].to_dict()
-        sids: list[str] = parreg["segments"]
+    while len(region_deque) > 0:
+        regid = region_deque.popleft()
+        parent_region: dict = rt[rt["id"] == regid].iloc[0].to_dict()
+        sids: list[str] = parent_region["segments"]
 
         for sid in sids:
             si = st[st["id"] == sid].index.to_list()[0]
             rids = st.iat[si, st.columns.get_loc("sub_regions")]
 
-            # calculate range index for child segments
+            # calculate coordinate index for child segments
             length = int(st.iat[si, st.columns.get_loc("length")])
-            if length > parreg["range"][1] - parreg["range"][0]:
-                raise Exception("Internal Error: element attribute calculation error")
-            elif length == parreg["range"][1] - parreg["range"][0]:
-                start = parreg["range"][0]
+            if length > parent_region["coordinate"][1] - parent_region["coordinate"][0]:
+                raise InternalError("Element attribute calculation error occured.")
+            elif (
+                length
+                == parent_region["coordinate"][1] - parent_region["coordinate"][0]
+            ):
+                start = parent_region["coordinate"][0]
             else:
-                dlen = parreg["range"][1] - parreg["range"][0] - length
-                start = parreg["range"][0] + math.floor(dlen / 2)
-            st.iat[si, st.columns.get_loc("range")] = [
+                dlen = (
+                    parent_region["coordinate"][1]
+                    - parent_region["coordinate"][0]
+                    - length
+                )
+                start = parent_region["coordinate"][0] + math.floor(dlen / 2)
+            st.iat[si, st.columns.get_loc("coordinate")] = [
                 start,
                 start + length,
             ]
 
             # judge if is default
-            segrank = st.iat[si, st.columns.get_loc("rank")]
+            segment_rank = st.iat[si, st.columns.get_loc("rank")]
             ris = rt[rt["id"].isin(rids)].index.to_list()
             rt.iloc[ris, rt.columns.get_loc("is_default")] = (
-                parreg["is_default"] and segrank == 0
+                parent_region["is_default"] and segment_rank == 0
             )
 
             for rid in rids:
                 ri = rt[rt["id"] == rid].index.to_list()[0]
 
-                # calculate range index for child-child regions
+                # calculate coordinate index for child-child regions
                 length = int(rt.iat[ri, rt.columns.get_loc("length")])
-                rt.iat[ri, rt.columns.get_loc("range")] = [
+                rt.iat[ri, rt.columns.get_loc("coordinate")] = [
                     start,
                     start + length,
                 ]
                 start += length
 
-                reg_dq.append(rid)
+                region_deque.append(rid)
 
     return rt, st, meta
+
+
+def build_subgraph(
+    subgraph_name: str,
+    filepath: str,
+    min_resolution: float,
+    temp_dir: str,
+):
+    """Build a subgraph from a validated GFA file (can be gzipped) for a Hierarchical Pangenome."""
+
+    gfa_file = fileutil.ungzip_file(filepath) if filepath.endswith(".gz") else filepath
+
+    try:
+        gfa_obj = gfa.GFA(gfa_file)
+        result = validate_gfa(gfa_obj)
+        if not result.valid:
+            raise DataInvalidError(result.message)
+        gfa_no_sequence, sequence_file = gfa_obj.separate_sequence(temp_dir)
+    finally:
+        if filepath.endswith(".gz"):
+            os.remove(gfa_file)
+
+    # TODO: Add function to merge successive variation / consensus nodes
+    gfa_obj = gfa.GFA(gfa_no_sequence)
+    g = gfa_obj.to_igraph()
+    result = validate_graph(g)
+    if not result.valid:
+        raise DataInvalidError(result.message)
+    rst = graph2rstree(g)
+    rst = calculate_properties_l2r(*rst)
+    rst = wrap_rstree(*rst, min_resolution)
+    rst = calculate_properties_r2l(*rst)
+    rst[2]["name"] = subgraph_name
+
+    return *rst, sequence_file
+
+
+def build_subgraphs_in_parallel(
+    subgraph_items: list[tuple[str, str]],
+    min_resolution: float,
+    temp_dir: str,
+):
+    """Build Hierarchical Pangenome subgraphs in parallel for a list of GFA subgraphs."""
+
+    partial_build_subgraph = functools.partial(
+        build_subgraph,
+        min_resolution=min_resolution,
+        temp_dir=temp_dir,
+    )
+
+    with mp.Pool() as pool:
+        sub_haps = pool.starmap(
+            partial_build_subgraph,
+            subgraph_items,
+        )
+
+    return sub_haps
+
+
+def update_ids_by_subgraph(
+    regions: pd.DataFrame,
+    segments: pd.DataFrame,
+    subgraph_id: int,
+    db_connection: psycopg2.extensions.connection,
+    sequence_file: Optional[str] = None,
+):
+    """Update IDs for regions and segments, and sequence file (if have) with
+    subgraph ID."""
+
+    rt = regions
+    st = segments
+    conn = db_connection
+
+    # Update subgraph ID in regions
+    rt["subgraph"] = subgraph_id
+    rt["subgraph"] = rt["subgraph"].astype("uint16")
+
+    # Update region & segment IDs
+    id_start_region = db.get_next_id_from_table(conn, "region")
+    id_start_segment = db.get_next_id_from_table(conn, "segment")
+    id_map_region = {
+        old_id: new_id
+        for old_id, new_id in zip(
+            rt["id"], range(id_start_region, id_start_region + len(rt))
+        )
+    }
+    id_map_segment = {
+        old_id: new_id
+        for old_id, new_id in zip(
+            st["id"], range(id_start_segment, id_start_segment + len(st))
+        )
+    }
+    rt["id"] = rt["id"].map(id_map_region)
+    st["id"] = st["id"].map(id_map_segment)
+    rt["parent_segment"] = rt["parent_segment"].map(id_map_segment)
+    rt["segments"] = rt["segments"].apply(
+        lambda segments: [id_map_segment[old_id] for old_id in segments]
+    )
+    st["sub_regions"] = st["sub_regions"].apply(
+        lambda regions: [id_map_region[old_id] for old_id in regions]
+    )
+
+    # Update segment IDs in sequence file
+    if sequence_file:
+        id_map_segment_file, tmp_sequence_file = fileutil.create_tmp_files(2)
+        try:
+            id_map_segment_df = pd.DataFrame(
+                list(id_map_segment.items()), columns=["old", "new"]
+            )
+            id_map_segment_df.to_csv(
+                id_map_segment_file, sep="\t", index=False, header=False
+            )
+            cmd = [
+                "awk",
+                r"""'BEGIN {FS = OFS = "\t"} NR==FNR {a[$1] = $2; next} {$1 = a[$1]; print}'""",
+                id_map_segment_file,
+                sequence_file,
+                ">",
+                tmp_sequence_file,
+                "&&",
+                "mv",
+                tmp_sequence_file,
+                sequence_file,
+            ]
+            subprocess.run(" ".join(cmd), shell=True, executable="/bin/bash")
+
+        finally:
+            os.remove(id_map_segment_file)
+
+
+def hap2db(
+    hap_info: dict,
+    subgraphs: list[tuple[pd.DataFrame, pd.DataFrame, dict, str | None]],
+    db_connection: psycopg2.extensions.connection,
+):
+    """Dump a hierarchical pangenome to database."""
+
+    conn = db_connection
+
+    with conn.cursor() as cursor:
+        try:
+            conn.autocommit = False
+            # Get clade ID
+            cursor.execute("SELECT id FROM clade WHERE name = %s", (hap_info["clade"],))
+            result = cursor.fetchone()
+            if result is not None:
+                clade_id = result[0]
+            else:  # Add `clade` record if not exists
+                cursor.execute(
+                    "INSERT INTO clade (name) VALUES (%s) RETURNING id",
+                    (hap_info["clade"],),
+                )
+                result = cursor.fetchone()
+                if result is None:
+                    raise DatabaseError("Failed to insert clade record.")
+                clade_id = result[0]
+
+            # Add `pangenome` record
+            hap_info["builder"] = f"hap v{hap.VERSION}"
+            hap_info["source_ids"] = []
+            cursor.execute(
+                "INSERT INTO pangenome (name, clade_id, description,creater, builder) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                (
+                    hap_info["name"],
+                    clade_id,
+                    hap_info["description"],
+                    hap_info["creater"],
+                    hap_info["builder"],
+                ),
+            )
+            result = cursor.fetchone()
+            if result is None:
+                raise DatabaseError("Failed to insert pangenome record.")
+            hap_id = result[0]
+
+            for regions, segments, meta, sequence_file in subgraphs:
+                rt = regions
+                st = segments
+                cursor.execute(
+                    "INSERT INTO subgraph (name, pangenome_id) VALUES (%s, %s) RETURNING id",
+                    (meta["name"], hap_id),
+                )  # Add `subgraph` record
+                result = cursor.fetchone()
+                if result is None:
+                    raise DatabaseError("Failed to insert subgraph record.")
+                subgraph_id = result[0]
+                cursor.execute(
+                    "INSERT INTO subgraph_statistics (id, max_level, total_length, total_variants) VALUES (%s, %s, %s, %s)",
+                    (
+                        subgraph_id,
+                        meta["max_level"],
+                        meta["total_length"],
+                        meta["total_variants"],
+                    ),
+                )  # Add subgraph statistics record
+
+                update_ids_by_subgraph(rt, st, subgraph_id, conn, sequence_file)
+
+                # Add source IDs to hap_info
+                id_map_source: dict[str, int] = {}
+                for source_name in meta["sources"]:
+                    cursor.execute(
+                        "SELECT id FROM source WHERE name = %s", (source_name,)
+                    )
+                    result = cursor.fetchone()
+                    if result is not None:
+                        source_id = result[0]
+                    else:
+                        cursor.execute(
+                            "INSERT INTO source (name, clade_id) VALUES (%s, %s) RETURNING id",
+                            (source_name, clade_id),
+                        )  # Add `source` record
+                        result = cursor.fetchone()
+                        if result is None:
+                            raise DatabaseError("Failed to insert source record.")
+                        else:
+                            source_id = result[0]
+                    id_map_source[source_name] = source_id
+                hap_info["source_ids"] = list(
+                    set().union(hap_info["source_ids"], id_map_source.values())
+                )
+
+                # Generate `segment_source_coordinate` table
+                segment_sources = st[["id", "sources"]].explode("sources")
+                segment_sources["sources"] = segment_sources["sources"].map(
+                    id_map_source
+                )
+                segment_sources.rename(
+                    columns={"id": "segment_id", "sources": "source_id"}, inplace=True
+                )
+                segment_sources.dropna(inplace=True)
+                id_start_segment_sources = db.get_next_id_from_table(
+                    conn, "segment_source_coordinate"
+                )
+                segment_sources.insert(
+                    0,
+                    "id",
+                    range(
+                        id_start_segment_sources,
+                        id_start_segment_sources + len(segment_sources),
+                    ),
+                )
+                segment_sources = segment_sources.astype(
+                    {"id": "uint64", "segment_id": "uint64", "source_id": "uint32"},
+                    copy=False,
+                )
+
+                # Generate `segment_original_id` table
+                segment_original_id = st[["id", "original_id"]].dropna()
+                segment_original_id = segment_original_id.astype(
+                    {"id": "uint64", "original_id": "string"}, copy=False
+                )
+
+                # Format `segment` table
+                st = st.merge(
+                    rt[["id", "segments"]].explode("segments"),
+                    left_on="id",
+                    right_on="segments",
+                    how="left",
+                    suffixes=("", "_r"),
+                    copy=False,
+                ).drop(["segments", "original_id", "sub_regions", "sources"], axis=1)
+                st.rename(columns={"id_r": "region_id"}, inplace=True)
+                st = st[
+                    [
+                        "id",
+                        "semantic_id",
+                        "level_range",
+                        "coordinate",
+                        "rank",
+                        "length",
+                        "frequency",
+                        "direct_variants",
+                        "total_variants",
+                        "is_wrapper",
+                        "region_id",
+                    ]
+                ]
+                st = st.astype(
+                    {
+                        "id": "uint64",
+                        "semantic_id": "string",
+                        "rank": "uint8",
+                        "length": "uint64",
+                        "frequency": "float16",
+                        "direct_variants": "uint8",
+                        "total_variants": "uint64",
+                        "is_wrapper": "bool",
+                        "region_id": "uint64",
+                    },
+                    copy=False,
+                )
+
+                # Format `region` table
+                rt.drop(
+                    [
+                        "length",
+                        "is_variant",
+                        "segments",
+                        "sources",
+                        "min_length",
+                        "before",
+                        "after",
+                    ],
+                    axis=1,
+                    inplace=True,
+                )
+                rt.rename(
+                    columns={
+                        "subgraph": "subgraph_id",
+                        "parent_segment": "parent_segment_id",
+                    },
+                    inplace=True,
+                )
+                rt = rt[
+                    [
+                        "id",
+                        "semantic_id",
+                        "level_range",
+                        "coordinate",
+                        "is_default",
+                        "type",
+                        "total_variants",
+                        "subgraph_id",
+                        "parent_segment_id",
+                    ]
+                ]
+                rt = rt.astype(
+                    {
+                        "id": "uint64",
+                        "semantic_id": "string",
+                        "is_default": "bool",
+                        "type": "string",
+                        "total_variants": "uint64",
+                        "subgraph_id": "uint32",
+                        "parent_segment_id": "Int64",  # nullable
+                    },
+                    copy=False,
+                )
+
+                # Copy from temporary files to database
+                (
+                    tmp_segment,
+                    tmp_region,
+                    tmp_segment_org_id,
+                    tmp_segment_src,
+                ) = fileutil.create_tmp_files(4)
+                try:
+                    st.to_csv(tmp_segment, sep="\t", index=False, header=False)
+                    rt.to_csv(tmp_region, sep="\t", index=False, header=False)
+                    segment_original_id.to_csv(
+                        tmp_segment_org_id, sep="\t", index=False, header=False
+                    )
+                    segment_sources.to_csv(
+                        tmp_segment_src, sep="\t", index=False, header=False
+                    )
+                    with open(tmp_segment) as f:
+                        cursor.copy_from(
+                            f, "segment", sep="\t", null=""
+                        )  # Dump `segment` records
+                    with open(tmp_region) as f:
+                        cursor.copy_from(
+                            f, "region", sep="\t", null=""
+                        )  # Dump `region` records
+                    with open(tmp_segment_org_id) as f:
+                        cursor.copy_from(
+                            f, "segment_original_id", sep="\t", null=""
+                        )  # Dump `segment_original_id` records
+                    with open(tmp_segment_src) as f:
+                        cursor.copy_from(
+                            f,
+                            "segment_source_coordinate",
+                            sep="\t",
+                            null="",
+                            columns=("id", "segment_id", "source_id"),
+                        )  # Dump `segment_source_coordinate` records
+                    if sequence_file:
+                        with open(sequence_file) as f:
+                            cursor.copy_from(
+                                f, "segment_sequence", sep="\t", null=""
+                            )  # Dump `segment_sequence` records
+                finally:
+                    fileutil.remove_files(
+                        [tmp_segment, tmp_region, tmp_segment_org_id, tmp_segment_src]
+                    )
+            # Dump `pangenome_source` records
+            pangenome_source = [
+                (hap_id, source_id) for source_id in hap_info["source_ids"]
+            ]
+            cursor.executemany(
+                "INSERT INTO pangenome_source (pangenome_id, source_id) VALUES (%s, %s)",
+                pangenome_source,
+            )
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.autocommit = True
 
 
 def export(
@@ -903,12 +1365,12 @@ def export(
 
     rt.drop(
         [
-            "name",
+            "semantic_id",
             "level_range",
             "length",
             "sources",
-            "is_var",
-            "total_var",
+            "is_variant",
+            "total_variants",
             "min_length",
             "before",
             "after",
@@ -920,7 +1382,7 @@ def export(
     if format == "st":
         rt.rename(
             columns={
-                "range": "region_range",
+                "coordinate": "region_coordinate",
                 "type": "region_type",
                 "is_default": "region_is_default",
             },
@@ -931,8 +1393,8 @@ def export(
                 :,
                 [
                     "segments",
-                    "region_range",
-                    "parent_seg",
+                    "region_coordinate",
+                    "parent_segment",
                     "region_type",
                     "region_is_default",
                 ],
@@ -952,178 +1414,25 @@ def export(
         rt.to_csv(basepath + ".rt.tsv", sep="\t", na_rep="*", index=False)
         st.to_csv(basepath + ".st.tsv", sep="\t", na_rep="*", index=False)
     else:
-        raise ValueError("Unsupported output format.")
-
-
-# def union(
-#     indir: str,
-#     pgname: str,
-#     outdir: str,
-#     format: str = "hp",
-# ):
-#     """Union a list of sub-Hierarchical-Pangenomes into a whole."""
-
-#     # TODO: Add `pgname` prefix to each element's name
-
-#     if format == "hp":
-#         subprocess.run(f"cat {indir}/*.hp > {outdir}/{pgname}.hp", shell=True)
-#     elif format == "tsv":
-#         cat = functools.partial(subprocess.run, shell=True)
-#         with mp.Pool() as pool:
-#             pool.map(
-#                 cat,
-#                 [
-#                     f"cat {indir}/*.rt.tsv > {outdir}/{pgname}.rt.tsv",
-#                     f"cat {indir}/*.st.tsv > {outdir}/{pgname}.st.tsv",
-#                 ],
-#             )
-#     else:
-#         raise ValueError("Unsupported output format.")
-
-
-def gfa2graph(filepath: str, gfa_version: float) -> ig.Graph:
-    """Convert a GFA file to an igraph.Graph object."""
-
-    # create temp files
-    infofp, nodefp, edgefp, edgetmp = fileutil.create_tmp_files(4)
-
-    # get awk scripts
-    awkfp_pps = os.path.join(hap.pkgroot, "lib", "parse_pansn_str.awk")
-    awkfp_g12c = os.path.join(hap.pkgroot, "lib", "gfa12csv.awk")
-    awkfp_g22c = os.path.join(hap.pkgroot, "lib", "gfa22csv.awk")
-
-    # `awk` -- convert the GFA format subgraph to CSV tables of nodes and edges, plus a info file
-    awk = [
-        "awk",
-        "-v",
-        f"infofp={infofp}",
-        "-v",
-        f"nodefp={nodefp}",
-        "-v",
-        f"edgefp={edgefp}",
-        "-f",
-        awkfp_pps,
-        "-f",
-    ]
-    if gfa_version < 2:
-        awk.append(awkfp_g12c)
-    else:  # GFA 2
-        awk.append(awkfp_g22c)
-    awk.append(filepath)
-
-    locale = ["LC_ALL=C"]
-
-    # `sort` & `join` -- remove edges with absent segment id
-    sort = ["sort", "-t", r"$'\t'", "-k"]
-    sort_n = sort + ["1,1", "-o", nodefp, nodefp]
-    sort_e1 = sort + ["1,1", "-o", edgetmp, edgefp]
-    sort_e2 = ["|"] + sort + ["2,2", "|"]
-    join = ["join", "-t", r"$'\t'"]
-    join1 = join + ["-1", "1", "-2", "1", "-o", "2.1,2.2", nodefp, edgetmp]
-    join2 = join + ["-1", "2", "-2", "1", "-o", "1.1,1.2", "-", nodefp, ">", edgefp]
-
-    # `sed` -- add table headers
-    sed = ["sed", "-i"]
-    sed_n = sed + [r"1i\name\tlength\tfrequency\tsources", nodefp]
-    sed_e = sed + [r"1i\source\ttarget", edgefp]
-
-    cmd = locale + join1 + sort_e2 + join2
-    try:
-        subprocess.run(awk)
-        subprocess.run(" ".join(locale + sort_n), shell=True, executable="/bin/bash")
-        subprocess.run(" ".join(locale + sort_e1), shell=True, executable="/bin/bash")
-        subprocess.run(" ".join(cmd), shell=True, executable="/bin/bash")
-        subprocess.run(sed_n)
-        subprocess.run(sed_e)
-
-        # convertions
-        nodedf = pd.read_csv(
-            nodefp,
-            sep="\t",
-            dtype={"name": "str", "length": "int32", "frequency": "float32"},
-            converters={"sources": lambda s: s.split(",")},
-        )
-        edgedf = pd.read_csv(edgefp, sep="\t", dtype={"source": "str", "target": "str"})
-
-        g = ig.Graph.DataFrame(edgedf, vertices=nodedf, use_vids=False)
-        if not g.is_dag:
-            raise ValueError(
-                "Cycle detected in graph, modify it into a DAG and re-run."
-            )
-
-        # store metadata in graph attributes
-        infodf = pd.read_csv(infofp, sep="\t", header=None, names=["key", "value"])
-        infodict = infodf.set_index("key")["value"].to_dict()
-        for k, v in infodict.items():
-            g[k] = v
-
-    finally:
-        # remove temp files
-        fileutil.remove_files([infofp, nodefp, edgefp, edgetmp])
-
-    return g
-
-
-def build(filepath: str, gfa_version: float, outdir: str, min_resolution: float):
-    """Build a Hierarchical Pangenome from a inseparable graph."""
-
-    basename = fileutil.remove_suffix_containing(os.path.basename(filepath), ".gfa")
-    basepath = os.path.join(outdir, basename)
-
-    g = gfa2graph(filepath, gfa_version)
-    rst = graph2rstree(g)
-    rst = calculate_properties_l2r(*rst)
-
-    # if not no_wrap:
-    rst = wrap_rstree(*rst, min_resolution)
-    rst = calculate_properties_r2l(*rst)
-
-    export(*rst, basepath)
-
-
-def build_in_parallel(filepath: list[str], outdir: str, min_resolution: float):
-    """Build Hierarchical Pangenomes in parallel for a list of GFA files."""
-
-    pp_gfa = functools.partial(
-        gfautil.preprocess_gfa,
-        outdir=outdir,
-    )
-    with mp.Pool() as pool:
-        pp_res = pool.map(pp_gfa, filepath)
-
-    gfamins, _ = zip(*pp_res)
-
-    sg_hpbd = functools.partial(
-        build,
-        outdir=outdir,
-        min_resolution=min_resolution,
-    )
-    with mp.Pool() as pool:
-        try:
-            pool.starmap(sg_hpbd, pp_res)
-        finally:
-            if click.confirm(
-                f"Delete temporary files: {gfamins}?", default=True
-            ):  # TODO: remove this after debugging
-                pool.map_async(os.remove, gfamins)
+        raise UnsupportedError("Unsupported output format.")
 
 
 def validate_arg_path(
-    ctx: click.Context, param: click.Parameter, value: tuple[pathlib.Path]
+    context: click.Context, param: click.Parameter, value: tuple[pathlib.Path]
 ):
     """Validate argument `path` of the `build` command."""
 
-    if "subgraph" in ctx.params and ctx.params["subgraph"]:
+    if "from_subgraphs" in context.params and context.params["from_subgraphs"]:
         if len(value) == 1:
             if value[0].is_dir():
                 return value
             else:
                 raise click.BadParameter(
-                    "More than one file, or a directory must be provided if specified with `-s/--subgraph`."
+                    "More than one file, or a directory must be provided if specified with `-s/--from-subgraphs`."
                 )
         else:
             for v in value:
-                if v.is_dir:
+                if v.is_dir():
                     raise click.BadParameter(
                         "Multiple directories are not allowed, use one directory or a list of files instead."
                     )
@@ -1131,14 +1440,58 @@ def validate_arg_path(
     else:
         if len(value) > 1:
             raise click.BadParameter(
-                "Building for more than one graph is not supported. use `-s/--subgraph` if building from a group of subgraphs."
+                "Building for more than one graph is not supported. use `-s/--from-subgraphs` if building from a group of subgraphs."
             )
         return value
 
 
+def get_name_from_context(context: click.Context) -> str:
+    """Get the inferred name from the context."""
+
+    if "from_subgraphs" in context.params and context.params["from_subgraphs"]:
+        if len(context.params["path"]) == 1:
+            subgraph_files = fileutil.get_files_from_dir(
+                str(context.params["path"][0]), "gfa"
+            )
+        else:
+            subgraph_files = [str(fp) for fp in context.params["path"]]
+        subgraph_filenames = [os.path.basename(fp) for fp in subgraph_files]
+        name = os.path.commonprefix(subgraph_filenames).split(".")[0]
+    else:
+        gfa_file = context.params["path"][0]
+        name = fileutil.remove_suffix_containing(gfa_file.name, ".gfa")
+    return name
+
+
+def check_name(name: str) -> bool:
+    """Check if the name is able to insert into the database."""
+
+    # Check if the name is valid
+    if (not name) or (len(name) > 20) or (not re.match(r"^[a-zA-Z0-9_-]+$", name)):
+        return False
+
+    # Check if the name exists in the database
+    try:
+        conn_info = db.get_connection_info()
+        conn_info = db.test_connection(conn_info)
+        with db.connect(conn_info) as conn:
+            db.create_tables_if_not_exist(conn)
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT 1 FROM pangenome WHERE name = %s", (name,))
+                return not cursor.fetchone()
+    except psycopg2.Error as e:
+        raise DatabaseError(f"Failed to check the name in the database: {e}")
+
+
+def get_username() -> str:
+    """Get the username of the current user."""
+
+    return db.get_connection_info().get("user", "")
+
+
 @click.command(
     "build",
-    context_settings=hap.ctx_settings,
+    context_settings=hap.CTX_SETTINGS,
     short_help="Build a Hierarchical Pangenome",
 )
 @click.pass_context
@@ -1150,18 +1503,39 @@ def validate_arg_path(
     callback=validate_arg_path,
 )
 @click.option(
-    "-s",
-    "--subgraph",
-    is_flag=True,
-    default=False,
-    help="Use a group of graphs as input",
+    "-n",
+    "--name",
+    prompt="Name of the HAP",
+    # default=get_name_from_context(ctx),  # FIXME: Add dynamic default value
+    help="Name of the Hierarchical Pangenome",
 )
 @click.option(
-    "-o",
-    "--outdir",
-    type=click.Path(file_okay=False, path_type=pathlib.Path),
-    help="Output directory",
+    "-a",
+    "--clade",
+    prompt="Clade of the HAP",
+    help="Clade of the Hierarchical Pangenome",
 )
+@click.option(
+    "-c",
+    "--creater",
+    prompt="Creater of the HAP",
+    default=get_username,
+    help="Creater of the Hierarchical Pangenome",
+)
+@click.option(
+    "-x",
+    "--description",
+    prompt="Description of the HAP",
+    default="",
+    help="Description of the Hierarchical Pangenome",
+)
+@click.option(
+    "-s",
+    "--from-subgraphs",
+    is_flag=True,
+    help="Use a group of graphs as input",
+)
+@click.option("--contig", is_flag=True, help="Save contig level subgraphs")
 @click.option(
     "-r",
     "--min-res",
@@ -1172,63 +1546,75 @@ def validate_arg_path(
 def main(
     ctx: click.Context,
     path: tuple[pathlib.Path],
-    subgraph: bool,
-    outdir: pathlib.Path,
+    name: str,
+    clade: str,
+    creater: str,
+    description: str,
+    from_subgraphs: bool,
+    contig: bool,
     min_res: float,
 ):
     """
-    Build a Hierarchical Pangenome from a pangenome graph in GFA format.
+    Build a Hierarchical Pangenome from a pangenome graph in GFA format, and
+    save to database.
 
-    PATH: Path to the pangenome graph in GFA format. If `-s/--subgraph` is specified, PATH should be a list of subgraphs or a
-    directory containing the subgraphs.
+    PATH: Path to the pangenome graph in GFA format. If `-s/--from-subgraphs`
+    is specified, PATH should be a list of subgraphs or a directory containing
+    the subgraphs.
     """
 
-    # if wrap:
-    #     # TODO: parse .hp file and run build_hierarchical_graph()
-    #     pass
+    # Get `name`
+    while not check_name(name):
+        click.echo(
+            "The name is invalid or already exists in the database, please try another one."
+        )
+        name = click.prompt("Name of the HAP")
 
-    # get `basename` and `subg_fps`
-    # subgraph as inputs
-    if subgraph:
+    # Subgraph as inputs
+    if from_subgraphs:
         if len(path) == 1:
-            subg_fps = fileutil.get_files_from_dir(str(path[0]), "gfa")
+            subgraph_files = fileutil.get_files_from_dir(str(path[0]), "gfa")
+            if len(subgraph_files) == 0:
+                raise click.BadParameter(
+                    "No GFA files found in the specified directory."
+                )
         else:
-            subg_fps = [str(fp) for fp in path]
-        subg_fns = [os.path.basename(fp) for fp in subg_fps]
-        basename = os.path.commonprefix(subg_fns).split(".")[0]
+            subgraph_files = [str(fp) for fp in path]
+        subgraph_names = [
+            os.path.basename(fp).split(".")[-2] for fp in subgraph_files
+        ]  # HACK: Assume the subgraph name is the second last part of the filename, without inner dots
+        subgraph_items = list(zip(subgraph_names, subgraph_files))
     else:
-        gfafp = path[0]
-        basename = fileutil.remove_suffix_containing(gfafp.name, ".gfa")
-        # divide into subgraphs
-        subgdir = tempfile.mkdtemp(prefix="hap.", suffix=".subgraph")
-        ctx.invoke(divide, file=gfafp, outdir=pathlib.Path(subgdir))
+        gfa_file = path[0]
+        gfa_obj = gfa.GFA(str(gfa_file))
+        # Divide into subgraphs
+        subgraph_dir = tempfile.mkdtemp(prefix="hap.", suffix=".subgraph")
+        subgraph_items = gfa_obj.divide_into_subgraphs(subgraph_dir, not contig)
+        if len(subgraph_items) == 0:
+            subgraph_items = [("", str(gfa_file))]
+        subgraph_files = [fp for _, fp in subgraph_items]
 
-        try:
-            subg_fps = fileutil.get_files_from_dir(subgdir, "gfa")
-        except FileNotFoundError:
-            subg_fps = [str(gfafp)]
+    temp_dir = tempfile.mkdtemp(prefix="hap.", suffix=".out")
 
-    if not outdir:
-        outdir = pathlib.Path.cwd() / f"{basename}.hap"
-    outdir = outdir.resolve()
-    if outdir.exists() and not fileutil.is_dir_empty(str(outdir)):
-        if click.confirm(
-            f"Output directory {str(outdir)} is not empty, continuing the program will erase files in it. Continue?",
-            abort=True,
-        ):
-            shutil.rmtree(str(outdir))
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    # build Hierachical Pangenomes
+    # Build Hierachical Pangenomes
     try:
-        build_in_parallel(subg_fps, str(outdir), min_res)
+        sub_haps = build_subgraphs_in_parallel(subgraph_items, min_res, temp_dir)
+
+        # Save to database
+        hap_info = {
+            "name": name,
+            "clade": clade,
+            "creater": creater,
+            "description": description,
+        }
+        conn_info = db.get_connection_info()
+        conn_info = db.test_connection(conn_info)
+        with db.connect(conn_info) as conn:
+            hap2db(hap_info, sub_haps, conn)
     finally:
-        if not subgraph:
-            if click.confirm(
-                f"Delete temporary subgraph directory: {subgdir}?",
-                default=True,
-            ):
-                shutil.rmtree(subgdir)
+        if not from_subgraphs:
+            shutil.rmtree(subgraph_dir)
+        shutil.rmtree(temp_dir)
 
 
 if __name__ == "__main__":

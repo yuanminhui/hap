@@ -1,12 +1,8 @@
 # use `-f parse_pansn_str.awk` precede this script
 
-BEGIN { 
-    OFS = "\t"
+BEGIN {
+    FS = OFS = "\t"
     hapcount = 0
-
-    # add tip node
-    print "start", "0" > nodefp
-    print "end", "0" > nodefp
 }
 
 # extract node id and length
@@ -21,8 +17,15 @@ BEGIN {
     print source, target >> edgefp;
 }
 
-/^O/ { 
+/^O/ {
     split($3, a, " ")
+
+    # add tip node
+    if (!(tips)) {
+        print "head", "0" >> nodefp
+        print "tail", "0" >> nodefp
+        tips = 1
+    }
 
     # link tip nodes
     nc = length(a)
@@ -30,11 +33,11 @@ BEGIN {
     end = substr(a[nc], 1, length(a[nc]) - 1)
     if (!(start in startarr)) {
         startarr[start]
-        print "start", start >> edgefp
+        print "head", start >> edgefp
     }
     if (!(end in endarr)) {
         endarr[end]
-        print end, "end" >> edgefp
+        print end, "tail" >> edgefp
     }
 
     # extract haplotype name
@@ -51,14 +54,21 @@ BEGIN {
             harr[sid] = n
         }   # NOTE: simply add on, may contain duplicates
     }
-    if (!(n in haps)) {
-        haps[n]
+    if (!(n in haplos)) {
+        haplos[n]
         hapcount++
     }   # non-duplicate haplotype names
 }
 
-/^U/ { 
+/^U/ {
     split($3, a, " ")
+
+    # add tip node
+    if (!(tips)) {
+        print "head", "0" >> nodefp
+        print "tail", "0" >> nodefp
+        tips = 1
+    }
 
     # link tip nodes
     nc = length(a)
@@ -66,11 +76,11 @@ BEGIN {
     end = a[nc]
     if (!(start in startarr)) {
         startarr[start]
-        print "start", start >> edgefp
+        print "head", start >> edgefp
     }
     if (!(end in endarr)) {
         endarr[end]
-        print end, "end" >> edgefp
+        print end, "tail" >> edgefp
     }
 
     # extract haplotype name
@@ -87,20 +97,20 @@ BEGIN {
             harr[sid] = n
         }
     }
-    if (!(n in haps)) {
-        haps[n]
+    if (!(n in haplos)) {
+        haplos[n]
         hapcount++
     }
 }
 
 # print nodes and info
-END { 
+END {
     for (id in larr) {
         c = gsub(",", ",", harr[id]) + 1
         print id, larr[id], c / hapcount, harr[id] >> nodefp
     }
 
-    for (hap in haps) {
+    for (hap in haplos) {
         if (hapstr == "") {
             hapstr = hap
         } else {

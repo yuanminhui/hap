@@ -6,7 +6,7 @@ def gfa2dictlist(filepath: str) -> tuple[list[dict], list[dict]]:
 
     nodes = []
     edges = []
-    with open(filepath, "r") as f:
+    with open(filepath) as f:
         for line in f:
             line = line.rstrip("\n")
             if line[0] == "S":
@@ -34,14 +34,14 @@ def gfa2dictlist(filepath: str) -> tuple[list[dict], list[dict]]:
                 end = path[-1].rstrip("+-")
                 edges.extend(
                     [
-                        {"source": "start", "target": start},
-                        {"source": end, "target": "end"},
+                        {"source": "head", "target": start},
+                        {"source": end, "target": "tail"},
                     ]
                 )
         if len(nodes) == 0 or len(edges) == 0:
             raise AttributeError("Invalid GFA file: No graph elements found")
         else:
-            nodes.extend([{"name": "start", "length": 0}, {"name": "end", "length": 0}])
+            nodes.extend([{"name": "head", "length": 0}, {"name": "tail", "length": 0}])
     return nodes, edges
 
 
@@ -51,11 +51,11 @@ def gfa2ig(filepath: str) -> Graph:
     nodes, edges = gfa2dictlist(filepath)
     if nodes and edges:
         g = Graph.DictList(nodes, edges, directed=True)
-        empstart = g.vs.find("start").index
+        empstart = g.vs.find("head").index
         for sv in g.vs(_indegree=0):
             # if sv.index != empstart:
             g.add_edge(empstart, sv.index)
-        empend = g.vs.find("end").index
+        empend = g.vs.find("tail").index
         for ev in g.vs(_outdegree=0):
             # if ev.index != empend:
             g.add_edge(ev.index, empend)
