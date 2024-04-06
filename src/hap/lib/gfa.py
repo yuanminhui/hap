@@ -90,7 +90,7 @@ class GFA:
                 capture_output=True,
             )
             if res.returncode == 0:
-                char = res.stdout
+                char = res.stdout.rstrip("\n")
                 if char == "E":
                     version = 2.0
                 elif char == "J":

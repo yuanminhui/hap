@@ -36,6 +36,7 @@ from hap.lib.util_obj import ValidationResult
 # TODO: Build a class for the hap
 # TODO: Organize the code into DDD-like structure
 # TODO: Refactor the class utils to composition or inheritance
+# TODO: Change method for generating IDs to avoid conflicts
 
 # Incremental IDs for element names
 identifiers = {
@@ -147,7 +148,7 @@ def process_path(
     if g.vs[start]["name"] == "head":
         region = Region(get_id("r"), "con")
         region.sources = haplotypes
-        segment = Segment(get_id("s"), original=False)
+        segment = Segment(get_id("s"))
         segment.is_wrapper = True
 
     # or side path
@@ -176,7 +177,11 @@ def process_path(
                 previous_region = Region(get_id("r"), "con")
                 previous_region.level_range = [level, level]
                 previous_region.sources = sources
-                previous_seg = previous_region.add_segment(g.vs[before]["name"])
+                previous_seg = (
+                    previous_region.add_segment(g.vs[before]["name"], original=True)
+                    if g.vs[before]["length"] > 0
+                    else previous_region.add_segment(g.vs[before]["name"])
+                )
                 previous_seg.length = g.vs[before]["length"]
                 previous_seg.frequency = len(previous_seg.sources) / len(haplotypes)
                 previous_region.parent_segment = parseg_id
@@ -193,7 +198,7 @@ def process_path(
                 )
                 sub_regions.append(previous_region.id)
             region = Region(get_id("r"), "var")
-            segment = Segment(get_id("s"), original=False)
+            segment = Segment(get_id("s"))
             segment.level_range = region.level_range = [level, level]
             g.vs[before]["parent_segment"] = None  # "before" can't be accessed anymore
             region.parent_segment = parseg_id
@@ -205,7 +210,7 @@ def process_path(
         # or add segment to existing region
         else:
             region_dict = rt[rt["before"] == g.vs[before]["name"]].iloc[0].to_dict()
-            segment = Segment(get_id("s"), original=False)
+            segment = Segment(get_id("s"))
             region = Region(region_dict["id"], region_dict["type"])
             region.from_dict(region_dict)
             segment.level_range = region.level_range
@@ -256,9 +261,10 @@ def process_path(
     # Rewrite properties if no `sub_regions` would be found
     if len(path) == 1:
         ni = path[0]
-        segment.id = g.vs[ni]["name"]
+        segment.id = g.vs[ni]["name"]  # TODO: debug why `original_id` is wrongly added
         segment.length = g.vs[ni]["length"]
-        segment.original_id = None
+        if segment.length > 0:
+            segment.original_id = segment.id
         g.vs[ni][
             "parent_segment"
         ] = None  # inseperable segment has no `parent_segment` record, a flag for leaves
@@ -266,7 +272,9 @@ def process_path(
     else:
         paths.append(path)
         segment.is_wrapper = True
-    region.segments.append(segment.id)
+    region.segments.append(
+        segment.id
+    )  # if region exists in the dataframe, it's `segments` will be updated
     segment_df = pd.DataFrame([segment.to_dict()])
     if st.empty:
         st = segment_df
@@ -275,61 +283,70 @@ def process_path(
 
     # Process allele region if have
     if g.vs[start]["name"] != "head":
-        # Find allele path
-        pi = g.vs[before]["path"]
-        origin_path = paths[pi]
-        b = origin_path.index(before)
-        successors = g.neighbors(node, mode="out")
-        afters = [s for s in successors if s in visited]
-        if len(afters) > 1:
-            raise DataInvalidError(
-                "Unable to resolve complex graph structure. Flatten the graph and rerun."
-            )
-        af = afters[0]
-        region.after = g.vs[af]["name"]  # TODO: eliminate multiple attachment relations
-        a = origin_path.index(af)
-        if b < a:
-            origin_allele_path = origin_path[b + 1 : a]
-
-        # Build allele segment
-        if not origin_allele_path:  # allele is del
-            del_node = g.add_vertex(
-                get_id("s"), length=0
-            ).index  # NOTE: `d` node isn't added to origin path
-            g.vs[del_node]["sources"] = []
-            g.vs[del_node]["frequency"] = 0
-            g.add_edges([(before, del_node), (del_node, af)])
-            g.delete_edges((before, af))
-            visited.add(del_node)
-            origin_allele_path = [del_node]
-        if len(origin_allele_path) == 1:
-            origin_allele_node = origin_allele_path[0]
-            allele_segment = Segment(g.vs[origin_allele_node]["name"])
-            allele_segment.length = g.vs[origin_allele_node]["length"]
-            allele_segment.frequency = g.vs[origin_allele_node]["frequency"]
-            allele_segment.sources = g.vs[origin_allele_node]["sources"]
-            g.vs[origin_allele_node]["parent_segment"] = None
+        if not rt[rt["before"] == g.vs[before]["name"]].empty:
+            return rt, st
         else:
-            allele_segment = Segment(get_id("s"), original=False)
-            allele_segment.is_wrapper = True
-            for node in origin_allele_path:
-                g.vs[node][
-                    "parent_segment"
-                ] = allele_segment.id  # Update parent for separable nodes
-                allele_segment.sources = list(
-                    set().union(allele_segment.sources, g.vs[node]["sources"])
+            # Find allele path
+            pi = g.vs[before]["path"]
+            origin_path = paths[pi]
+            b = origin_path.index(before)
+            successors = g.neighbors(node, mode="out")
+            afters = [s for s in successors if s in visited]
+            if len(afters) > 1:
+                raise DataInvalidError(
+                    "Unable to resolve complex graph structure. Flatten the graph and rerun."
                 )
-                allele_segment.frequency = max(
-                    allele_segment.frequency, g.vs[node]["frequency"]
-                )
+            af = afters[0]
+            region.after = g.vs[af][
+                "name"
+            ]  # TODO: eliminate multiple attachment relations
+            a = origin_path.index(af)
+            if b < a:
+                origin_allele_path = origin_path[b + 1 : a]
 
-        allele_segment.level_range = [level, level]
-        region.segments.append(allele_segment.id)
-        st = pd.concat(
-            [st, pd.DataFrame([allele_segment.to_dict()])],
-            ignore_index=True,
-            copy=False,
-        )
+            # Build allele segment
+            if not origin_allele_path:  # allele is del
+                del_node = g.add_vertex(
+                    get_id("s"), length=0
+                ).index  # NOTE: `d` node isn't added to origin path
+                g.vs[del_node]["sources"] = []
+                g.vs[del_node]["frequency"] = 0
+                g.add_edges([(before, del_node), (del_node, af)])
+                g.delete_edges((before, af))
+                visited.add(del_node)
+                origin_allele_path = [del_node]
+            if len(origin_allele_path) == 1:
+                origin_allele_node = origin_allele_path[0]
+                allele_segment = (
+                    Segment(g.vs[origin_allele_node]["name"], original=True)
+                    if g.vs[origin_allele_node]["length"] > 0
+                    else Segment(g.vs[origin_allele_node]["name"])
+                )
+                allele_segment.length = g.vs[origin_allele_node]["length"]
+                allele_segment.frequency = g.vs[origin_allele_node]["frequency"]
+                allele_segment.sources = g.vs[origin_allele_node]["sources"]
+                g.vs[origin_allele_node]["parent_segment"] = None
+            else:
+                allele_segment = Segment(get_id("s"))
+                allele_segment.is_wrapper = True
+                for node in origin_allele_path:
+                    g.vs[node][
+                        "parent_segment"
+                    ] = allele_segment.id  # Update parent for separable nodes
+                    allele_segment.sources = list(
+                        set().union(allele_segment.sources, g.vs[node]["sources"])
+                    )
+                    allele_segment.frequency = max(
+                        allele_segment.frequency, g.vs[node]["frequency"]
+                    )
+
+            allele_segment.level_range = [level, level]
+            region.segments.append(allele_segment.id)
+            st = pd.concat(
+                [st, pd.DataFrame([allele_segment.to_dict()])],
+                ignore_index=True,
+                copy=False,
+            )
 
     rt = pd.concat(
         [rt, pd.DataFrame([region.to_dict()])], ignore_index=True, copy=False
@@ -339,11 +356,6 @@ def process_path(
 
 def graph2rstree(graph: ig.Graph):
     """Build a region-segment tree for pangenome representation from a normalized sequence graph."""
-
-    # if examine_complex_graph(graph):
-    #     raise DataInvalidError(
-    #         "Part of the graph doesn't fit the structure of a pangenome graph."
-    #     )
 
     # Inits
     visited_nodes = set()
@@ -422,7 +434,11 @@ def graph2rstree(graph: ig.Graph):
             region = Region(get_id("r"), "con")
             region.level_range = [level, level]
             region.sources = copy.deepcopy(st.iat[pi, st.columns.get_loc("sources")])
-            segment = region.add_segment(se["name"])
+            segment = (
+                region.add_segment(se["name"], original=True)
+                if se["length"] > 0
+                else region.add_segment(se["name"])
+            )
             segment.length = se["length"]
             segment.frequency = len(segment.sources) / len(meta["sources"])
             region.parent_segment = parseg_id
@@ -933,6 +949,7 @@ def calculate_properties_r2l(regions: pd.DataFrame, segments: pd.DataFrame, meta
             ]
 
             # judge if is default
+            # TODO: Fix method of defining `is_default`
             segment_rank = st.iat[si, st.columns.get_loc("rank")]
             ris = rt[rt["id"].isin(rids)].index.to_list()
             rt.iloc[ris, rt.columns.get_loc("is_default")] = (
@@ -1231,10 +1248,14 @@ def hap2db(
                         "region_id",
                     ]
                 ]
+                st["coordinate"] = st["coordinate"].apply(
+                    lambda range: f"[{range[0]},{range[1]})"
+                )
                 st = st.astype(
                     {
                         "id": "uint64",
                         "semantic_id": "string",
+                        "coordinate": "string",
                         "rank": "uint8",
                         "length": "uint64",
                         "frequency": "float16",
@@ -1280,10 +1301,14 @@ def hap2db(
                         "parent_segment_id",
                     ]
                 ]
+                rt["coordinate"] = rt["coordinate"].apply(
+                    lambda range: f"[{range[0]},{range[1]})"
+                )
                 rt = rt.astype(
                     {
                         "id": "uint64",
                         "semantic_id": "string",
+                        "coordinate": "string",
                         "is_default": "bool",
                         "type": "string",
                         "total_variants": "uint64",

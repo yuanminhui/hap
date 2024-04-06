@@ -14,7 +14,7 @@ class Segment:
     A class to represent a segment of the HAP model.
     """
 
-    def __init__(self, id: str, original=True):
+    def __init__(self, id: str, original=False):
         """
         Initialize the segment with the given ID.
 
@@ -106,7 +106,7 @@ class Region:
         self.before = None
         self.after = None
 
-    def add_segment(self, id: str):
+    def add_segment(self, id: str, original: bool = False):
         """
         Create and add segment to current region, setting the same
         `level_range`, `sources`, and return the created segment.
@@ -120,7 +120,7 @@ class Region:
             Segment: The added segment.
         """
 
-        segment = Segment(id)
+        segment = Segment(id, original)
         self.segments.append(segment.id)
         segment.level_range = self.level_range
         segment.sources = self.sources
