@@ -9,7 +9,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import Optional
+from typing import Any, NamedTuple, Optional
 
 import click
 import igraph as ig
@@ -112,14 +112,14 @@ def unvisited_path(
     """
 
     next = start_node
-    while next != None:
+    while next is not None:
         yield next
         successors = graph.neighbors(next, mode="out")
         next = None
         if successors:
             for sr in successors:
                 if sr not in visited_nodes:
-                    if next != None:
+                    if next is not None:
                         path_starts.append(sr)
                     else:
                         next = sr
@@ -167,9 +167,9 @@ def process_path(
             # Get parent segment's properties
             parseg_id = g.vs[before]["parent_segment"]
             pi = st[st["id"] == parseg_id].index[0]
-            level = st.iat[pi, st.columns.get_loc("level_range")][0] + 1
-            sub_regions = st.iat[pi, st.columns.get_loc("sub_regions")]
-            sources = copy.deepcopy(st.iat[pi, st.columns.get_loc("sources")])
+            level = st.at[pi, "level_range"][0] + 1
+            sub_regions = st.at[pi, "sub_regions"]
+            sources = st.at[pi, "sources"].copy()
 
             # Build elements and fill properties
             if g.vs[before]["name"] != "head":
@@ -358,9 +358,9 @@ def graph2rstree(graph: ig.Graph):
     """Build a region-segment tree for pangenome representation from a normalized sequence graph."""
 
     # Inits
-    visited_nodes = set()
-    path_starts = collections.deque()
-    paths = []
+    visited_nodes: set[int] = set()
+    path_starts: collections.deque = collections.deque()
+    paths: list[list] = []
     meta = {"sources": graph["haplotypes"].split(",")}
     rt = pd.DataFrame(
         columns=[
@@ -428,12 +428,12 @@ def graph2rstree(graph: ig.Graph):
             # get current level
             parseg_id = se["parent_segment"]
             pi = st[st["id"] == parseg_id].index[0]
-            level = st.iat[pi, st.columns.get_loc("level_range")][0] + 1
+            level = st.at[pi, "level_range"][0] + 1
 
             # build elements and fill properties
             region = Region(get_id("r"), "con")
             region.level_range = [level, level]
-            region.sources = copy.deepcopy(st.iat[pi, st.columns.get_loc("sources")])
+            region.sources = st.at[pi, "sources"].copy()
             segment = (
                 region.add_segment(se["name"], original=True)
                 if se["length"] > 0
@@ -444,7 +444,7 @@ def graph2rstree(graph: ig.Graph):
             region.parent_segment = parseg_id
 
             # write to dataframe
-            subrg = st.iat[pi, st.columns.get_loc("sub_regions")]
+            subrg = st.at[pi, "sub_regions"]
             subrg.append(region.id)
             st = pd.concat(
                 [st, pd.DataFrame([segment.to_dict()])], ignore_index=True, copy=False
@@ -540,18 +540,16 @@ def calculate_properties_l2r(rt: pd.DataFrame, st: pd.DataFrame, meta: dict):
         ].index.tolist()  # regions at the same level
         for ri in ris:
             # fill region `length` from child segment's max length
-            segments: list = rt.iat[ri, rt.columns.get_loc("segments")]
+            segments: list = rt.at[ri, "segments"]
             sis = st[st["id"].isin(segments)].index.tolist()
             lensr = st.iloc[sis]["length"]
             maxlen = lensr.max()
             minlen = lensr.min()
-            rt.iat[ri, rt.columns.get_loc("length")] = maxlen
-            rt.iat[ri, rt.columns.get_loc("min_length")] = lensr[lensr > 0].min()
+            rt.at[ri, "length"] = maxlen
+            rt.at[ri, "min_length"] = lensr[lensr > 0].min()
 
             # fill `total_variants`
-            rt.iat[ri, rt.columns.get_loc("total_variants")] = st.iloc[sis][
-                "total_variants"
-            ].sum()
+            rt.at[ri, "total_variants"] = st.iloc[sis]["total_variants"].sum()
 
             # fill region & segment's `semantic_id`
             if len(segments) > 1:  # variant exists
@@ -562,52 +560,50 @@ def calculate_properties_l2r(rt: pd.DataFrame, st: pd.DataFrame, meta: dict):
                 # allele
                 if std / mean < 0.1:
                     if (lensr == 1).all():
-                        rt.iat[ri, rt.columns.get_loc("type")] = "snp"
+                        rt.at[ri, "type"] = "snp"
                         rn = get_id("snp")
                     else:
-                        rt.iat[ri, rt.columns.get_loc("type")] = "ale"
+                        rt.at[ri, "type"] = "ale"
                         rn = get_id("ale")
-                    rt.iat[ri, rt.columns.get_loc("semantic_id")] = rn
-                    st.iloc[sis, st.columns.get_loc("semantic_id")] = [
+                    rt.at[ri, "semantic_id"] = rn
+                    st.loc[sis, "semantic_id"] = [
                         rn + "-" + chr(j) for j in range(97, 97 + len(sis))
                     ]  # generate names like `ALE-{n}-a,b,c`
 
                 # del exists
                 elif minlen == 0 or (minlen < 10 and d / minlen > 5):
-                    rt.iat[ri, rt.columns.get_loc("min_length")] = lensr[
-                        lensr > minlen
-                    ].min()
+                    rt.at[ri, "min_length"] = lensr[lensr > minlen].min()
                     if d > 50:
-                        rt.iat[ri, rt.columns.get_loc("type")] = "sv"
+                        rt.at[ri, "type"] = "sv"
                         rn = get_id("sv")
                     else:
-                        rt.iat[ri, rt.columns.get_loc("type")] = "ind"
+                        rt.at[ri, "type"] = "ind"
                         rn = get_id("ind")
-                    rt.iat[ri, rt.columns.get_loc("semantic_id")] = rn
+                    rt.at[ri, "semantic_id"] = rn
                     mini = lensr.idxmin()
-                    st.iat[mini, st.columns.get_loc("semantic_id")] = rn + "-d"
+                    st.at[mini, "semantic_id"] = rn + "-d"
                     sis.remove(mini)
                     if len(sis) > 1:
-                        st.iloc[sis, st.columns.get_loc("semantic_id")] = [
+                        st.loc[sis, "semantic_id"] = [
                             rn + "-i" + chr(j) for j in range(97, 97 + len(sis))
                         ]
                     else:
-                        st.iloc[sis, st.columns.get_loc("semantic_id")] = rn + "-i"
+                        st.loc[sis, "semantic_id"] = rn + "-i"
 
                 # not determined
                 else:
-                    rt.iat[ri, rt.columns.get_loc("type")] = "var"
+                    rt.at[ri, "type"] = "var"
                     rn = get_id("var")
-                    rt.iat[ri, rt.columns.get_loc("semantic_id")] = rn
-                    st.iloc[sis, st.columns.get_loc("semantic_id")] = [
+                    rt.at[ri, "semantic_id"] = rn
+                    st.loc[sis, "semantic_id"] = [
                         rn + "-" + chr(j) for j in range(97, 97 + len(sis))
                     ]
 
             # consensus
             else:
                 rn = get_id("con")
-                rt.iat[ri, rt.columns.get_loc("semantic_id")] = rn
-                st.iloc[sis, st.columns.get_loc("semantic_id")] = rn
+                rt.at[ri, "semantic_id"] = rn
+                st.loc[sis, "semantic_id"] = rn
 
         if i >= 1:
             sis = st[
@@ -661,8 +657,191 @@ def wrap_rstree(
     mask = st["level_range"].apply(lambda lr: lr[1] > 1)
     st.loc[mask, "level_range"] = st.loc[mask, "level_range"].apply(lambda lr: [])
 
+    def calc_wrapping_within_segment(segment: NamedTuple, group_has_default: bool):
+        """
+        Calculate changes of properties after wrapping regions within
+        a segment.
+
+        Args:
+            segment (NamedTuple): Parent segment containing regions to be
+            processed.
+            group_has_default (bool): Whether the group within parent region
+            has defined default regions.
+
+        Returns (in a dict):
+            wrapper_regions (DataFrame): Wrapper regions to be added.
+            wrapper_segments (DataFrame): Wrapper segments to be added.
+            normal_regions (set): Regions that don't need to be wrapped.
+            new_sub_regions (list): Updated sub regions for the parent segment.
+            is_default (bool): Whether regions in the segment are default on
+            display.
+
+        Relies on the following variables:
+            rt: DataFrame
+            st: DataFrame
+            meta: dict
+            resolution: float
+            min_length_px: float
+        """
+
+        region_ids = segment.sub_regions.copy()
+        r2bw_iranges_dq: collections.deque = (
+            collections.deque()
+        )  # "r2bw" = "regions to be wrapped"
+        wrapper_regions = pd.DataFrame(columns=rt.columns)
+        wrapper_segments = pd.DataFrame(columns=st.columns)
+        normal_regions = set(region_ids)
+        # Judge if regions need to be wrapped
+        for region in rt[rt["id"].isin(region_ids)].itertuples():
+
+            # Add wrapper nodes if one of its segment's length is too small
+            if region.min_length < resolution * min_length_px:
+                # Extend to find proper wrapping range
+                posi = region_ids.index(region.id)
+                b = a = posi
+                total_length = 0
+                while total_length < resolution * min_length_px and not (
+                    b < 0 and a > len(region_ids) - 1
+                ):  # continue extending if wrapped region still too small
+                    if b >= 1:
+                        lefti = b
+                        b = -1
+                        for j in range(lefti - 1, -1, -1):
+                            if rt[rt["id"] == region_ids[j]]["type"].iloc[0] != "con":
+                                b = j
+                                break
+                    else:
+                        b = -1
+                    if a <= len(region_ids) - 2:
+                        righti = a
+                        a = len(region_ids)
+                        for j in range(righti + 1, len(region_ids)):
+                            if rt[rt["id"] == region_ids[j]]["type"].iloc[0] != "con":
+                                a = j
+                                break
+                    else:
+                        a = len(region_ids)
+                    r2bw_ids = region_ids[b + 1 : a]
+                    r2bw_df = rt[rt["id"].isin(r2bw_ids)]
+                    total_length = r2bw_df["length"].sum()
+
+                r2bw_iranges_dq.append([b + 1, a - 1])
+
+        # Union regions to be wrapped
+        r2bw_iranges: list[list[int]] = []
+        last = None
+        while len(r2bw_iranges_dq) > 0:
+            current = r2bw_iranges_dq.popleft()
+            if last is None:
+                last = current
+            else:
+                if last[1] >= current[0]:
+                    last[1] = current[1]  # merge last and current range if overlapped
+                else:
+                    r2bw_iranges.append(last)
+                    last = current
+        if last is not None:
+            r2bw_iranges.append(last)
+
+        # Wrap regions
+        for irange in r2bw_iranges:
+            r2bw_ids = region_ids[irange[0] : irange[1] + 1]
+            r2bw_df = rt[rt["id"].isin(r2bw_ids)]
+            total_length = r2bw_df["length"].sum()
+            normal_regions.difference_update(set(r2bw_ids))
+
+            # build wrapper elements and fill properties
+            wrapper_region = Region(get_id("r"), "con")
+            wrapper_region.level_range = [i, i]
+            wrapper_region.sources = segment.sources.copy()
+            wrapper_segment = wrapper_region.add_segment(get_id("s"))
+            wrapper_region.length = wrapper_region.min_length = (
+                wrapper_segment.length
+            ) = total_length
+            wrapper_segment.frequency = len(wrapper_segment.sources) / len(
+                meta["sources"]
+            )
+            wrapper_segment.is_wrapper = True
+            wrapper_segment.semantic_id = wrapper_region.semantic_id = get_id("con")
+            wrapper_segment.direct_variants = len(r2bw_df[r2bw_df["is_variant"]])
+            wrapper_segment.total_variants = (
+                r2bw_df["total_variants"].sum() + wrapper_segment.direct_variants
+            )
+            wrapper_region.total_variants = wrapper_segment.total_variants
+            wrapper_region.parent_segment = segment.id
+            wrapper_segment.sub_regions = r2bw_ids.copy()
+
+            # write to dataframe
+            wrapper_region_df = pd.DataFrame([wrapper_region.to_dict()])
+            wrapper_region_df = wrapper_region_df.astype(
+                {
+                    "id": "string",
+                    "semantic_id": "string",
+                    "is_default": "bool",
+                    "length": "uint64",
+                    "is_variant": "bool",
+                    "type": "string",
+                    "total_variants": "uint64",
+                    "subgraph": "string",
+                    "parent_segment": "string",
+                    "min_length": "uint64",
+                    "before": "string",
+                    "after": "string",
+                },
+                copy=False,
+            )
+            wrapper_segment_df = pd.DataFrame([wrapper_segment.to_dict()])
+            wrapper_segment_df = wrapper_segment_df.astype(
+                {
+                    "id": "string",
+                    "original_id": "string",
+                    "semantic_id": "string",
+                    "rank": "uint8",
+                    "length": "uint64",
+                    "frequency": "float16",
+                    "direct_variants": "uint8",
+                    "total_variants": "uint64",
+                    "is_wrapper": "bool",
+                },
+                copy=False,
+            )
+
+            wrapper_regions = pd.concat(
+                [wrapper_regions, wrapper_region_df],
+                ignore_index=True,
+                copy=False,
+            )
+            wrapper_segments = pd.concat(
+                [wrapper_segments, wrapper_segment_df],
+                ignore_index=True,
+                copy=False,
+            )
+
+            # iterate preparation for update of parent segment's `sub_regions` property
+            region_ids[irange[0] : irange[1] + 1] = [""] * (irange[1] - irange[0] + 1)
+            region_ids[irange[0]] = wrapper_region.id
+
+        # New `sub_regions` property for parent segment
+        new_sub_regions = [rid for rid in region_ids if rid != ""]
+
+        is_default = (
+            True if not group_has_default and len(normal_regions) > 0 else False
+        )
+
+        return {
+            "wrapper_regions": wrapper_regions,
+            "wrapper_segments": wrapper_segments,
+            "normal_regions": normal_regions,
+            "new_sub_regions": new_sub_regions,
+            "is_default": is_default,
+        }
+
     # Traverse the hierarchical graph from top to bottom
     for i in range(1, max_level):  # exclude top & bottom layer
+        # In each iteration, the script does the following:
+        # 1. Find regions at current level
+        # 2. Judge if these regions are proper to be at this level (need to be wrapped or not)
+        # 3. Fill next level with regions (from former level, unwrapped regions, or wrapped regions)
         resolution = 2 ** (max_level - i) * min_resolution
         remaining_regions = set(
             rt[
@@ -671,84 +850,52 @@ def wrap_rstree(
                 )
             ]["id"].to_list()
         )
-        parent_segment_table = st[
+        parent_segment_series = st[
             st["level_range"].apply(
                 lambda lr: len(lr) > 0 and i - 1 >= lr[0] and i - 1 <= lr[1]
             )
             & (st["sub_regions"].apply(len) > 0)
+        ]["id"]
+        regions_with_child = rt[
+            rt["level_range"].apply(
+                lambda lr: len(lr) > 0 and i - 1 >= lr[0] and i - 1 <= lr[1]
+            )
+            & rt["segments"].apply(
+                lambda segs: not set(segs).isdisjoint(set(parent_segment_series))
+            )
         ]
 
-        # Treat regions in each parent segment seperately
-        for rid_list in copy.deepcopy(parent_segment_table["sub_regions"].to_list()):
-            remaining_regions.difference_update(set(rid_list))
-            ris = rt[rt["id"].isin(rid_list)].index.to_list()
-            r2bw_iranges_dq = collections.deque()  # "r2bw" = "regions to be wrapped"
-            normal_regions = set(rid_list)
-            for ri in ris:
-                region = rt.iloc[ri].to_dict()
-                # if region["id"] not in rid_list:
-                #     continue
+        # Process a group of sub-regions in parent region's segments
+        for parent_region in regions_with_child.itertuples():
+            group_has_default = False
+            calc_after_wrapping: list[dict[str, Any]] = []
 
-                # Add wrapper nodes if one of its segment's length is too small
-                if region["min_length"] < resolution * min_length_px:
-                    # Extend to find proper wrapping range
-                    posi = rid_list.index(region["id"])
-                    b = a = posi
-                    total_length = 0
-                    while total_length < resolution * min_length_px and not (
-                        b < 0 and a > len(rid_list) - 1
-                    ):  # continue extending if wrapped region still too small
-                        if b >= 1:
-                            lefti = b
-                            b = -1
-                            for j in range(lefti - 1, -1, -1):
-                                if rt[rt["id"] == rid_list[j]]["type"].iloc[0] != "con":
-                                    b = j
-                                    break
-                        else:
-                            b = -1
-                        if a <= len(rid_list) - 2:
-                            righti = a
-                            a = len(rid_list)
-                            for j in range(righti + 1, len(rid_list)):
-                                if rt[rt["id"] == rid_list[j]]["type"].iloc[0] != "con":
-                                    a = j
-                                    break
-                        else:
-                            a = len(rid_list)
-                        r2bw_ids = rid_list[b + 1 : a]
-                        r2bw_df = rt[rt["id"].isin(r2bw_ids)]
-                        total_length = r2bw_df["length"].sum()
-
-                    r2bw_iranges_dq.append([b + 1, a - 1])
-                    # del rid_list[b + 1 : a]
-
-            # union regions to be wrapped
-            r2bw_iranges: list[list[int]] = []
-            last = None
-            while len(r2bw_iranges_dq) > 0:
-                current = r2bw_iranges_dq.popleft()
-                if last == None:
-                    last = current
-                else:
-                    if last[1] >= current[0]:
-                        last[1] = current[1]
-                    else:
-                        r2bw_iranges.append(last)
-                        last = current
-            r2bw_iranges.append(last)
-
-            si = st[st["id"] == region["parent_segment"]].index.to_list()[0]
-
-            # move parent segment to current layer if all its child regions are wrapped into one
-            if (
-                len(r2bw_iranges) == 1
-                and r2bw_iranges[0][0] == 0
-                and r2bw_iranges[0][1] == len(rid_list) - 1
+            # Treat regions in each parent segment seperately
+            for segment in (
+                st[st["id"].isin(parent_region.segments)]
+                .sort_values("rank")
+                .itertuples()
             ):
-                level_range = st.iat[si, st.columns.get_loc("level_range")]
-                level_range[1] = i  # NOTE: update df cell in place
-                mask = rt["id"].isin(rid_list)
+                if len(segment.sub_regions) == 0:
+                    continue
+                remaining_regions.difference_update(set(segment.sub_regions))
+                result = calc_wrapping_within_segment(segment, group_has_default)
+                if result["is_default"]:
+                    group_has_default = True
+                result.update({"parent_segment_index": segment.Index})
+                calc_after_wrapping.append(result)
+
+            # Move parent region and segments to current layer if all its child regions are wrapped into one
+            if all([len(res["normal_regions"]) == 0 for res in calc_after_wrapping]):
+                level_range = rt.at[parent_region.Index, "level_range"]
+                level_range[1] = i  # update parent region's `level_range` in place
+                mask = st["id"].isin(parent_region.segments)
+                st.loc[mask, "level_range"] = st.loc[mask, "level_range"].apply(
+                    lambda lr: [lr[0], i]
+                )
+                # Move elements to next layer
+                regions = st.loc[mask, "sub_regions"].sum()
+                mask = rt["id"].isin(regions)
                 rt.loc[mask, "level_range"] = rt.loc[mask, "level_range"].apply(
                     lambda lr: [i + 1, i + 1]
                 )
@@ -757,135 +904,102 @@ def wrap_rstree(
                 st.loc[mask, "level_range"] = st.loc[mask, "level_range"].apply(
                     lambda lr: [i + 1, i + 1]
                 )
-                normal_regions = set()
-                r2bw_iranges = []
+                continue
 
-            # Wrap regions
-            for irange in r2bw_iranges:
-                r2bw_ids = rid_list[irange[0] : irange[1] + 1]
-                r2bw_df = rt[rt["id"].isin(r2bw_ids)]
-                total_length = r2bw_df["length"].sum()
-                normal_regions.difference_update(set(r2bw_ids))
+            if not group_has_default:
+                raise InternalError("Calculation error during wrapping regions.")
 
-                # build wrapper elements and fill properties
-                wrap_region = Region(get_id("r"), "con")
-                wrap_region.level_range = [i, i]
-                wrap_region.sources = copy.deepcopy(
-                    st.iat[si, st.columns.get_loc("sources")]
-                )
-                wrap_segment = wrap_region.add_segment(get_id("s"))
-                wrap_region.length = wrap_region.min_length = wrap_segment.length = (
-                    total_length
-                )
-                wrap_segment.frequency = len(wrap_segment.sources) / len(
-                    meta["sources"]
-                )
-                wrap_segment.is_wrapper = True
-                wrap_segment.semantic_id = wrap_region.semantic_id = get_id("con")
-                wrap_segment.direct_variants = len(r2bw_df[r2bw_df["is_variant"]])
-                wrap_segment.total_variants = (
-                    r2bw_df["total_variants"].sum() + wrap_segment.direct_variants
-                )
-                wrap_region.total_variants = wrap_segment.total_variants
-                wrap_region.parent_segment = region["parent_segment"]
-                wrap_segment.sub_regions = r2bw_ids
+            # Process by each segment with sub-regions
+            for res in calc_after_wrapping:
 
-                # write to dataframe
-                wr_df = pd.DataFrame([wrap_region.to_dict()])
-                wr_df = wr_df.astype(
-                    {
-                        "id": "string",
-                        "semantic_id": "string",
-                        "is_default": "bool",
-                        "length": "uint64",
-                        "is_variant": "bool",
-                        "type": "string",
-                        "total_variants": "uint64",
-                        "subgraph": "string",
-                        "parent_segment": "string",
-                        "min_length": "uint64",
-                        "before": "string",
-                        "after": "string",
-                    },
-                    copy=False,
+                # Add wrapper regions and segments to dataframes
+                rt = pd.concat(
+                    [rt, res["wrapper_regions"]], ignore_index=True, copy=False
                 )
-                ws_df = pd.DataFrame([wrap_segment.to_dict()])
-                ws_df = ws_df.astype(
-                    {
-                        "id": "string",
-                        "original_id": "string",
-                        "semantic_id": "string",
-                        "rank": "uint8",
-                        "length": "uint64",
-                        "frequency": "float16",
-                        "direct_variants": "uint8",
-                        "total_variants": "uint64",
-                        "is_wrapper": "bool",
-                    },
-                    copy=False,
+                st = pd.concat(
+                    [st, res["wrapper_segments"]], ignore_index=True, copy=False
                 )
 
-                rt = pd.concat([rt, wr_df], ignore_index=True, copy=False)
-                st = pd.concat([st, ws_df], ignore_index=True, copy=False)
+                # Update parent segment's `sub_regions` property
+                st.at[res["parent_segment_index"], "sub_regions"] = res[
+                    "new_sub_regions"
+                ]
 
-                # iterate preparation for update of parent segment's `sub_regions` property
-                rid_list[irange[0] : irange[1] + 1] = [""] * (irange[1] - irange[0] + 1)
-                rid_list[irange[0]] = wrap_region.id
+                # Update `parent_segment` property for wrapped regions
+                for wrapper_segment in res["wrapper_segments"].itertuples():
+                    mask = rt["id"].isin(wrapper_segment.sub_regions)
+                    rt.loc[mask, "parent_segment"] = wrapper_segment.id
 
-                # Move wrapped elements to next layer
-                mask = rt["id"].isin(r2bw_ids)
-                rt.loc[mask, "parent_segment"] = wrap_segment.id
-                rt.loc[mask, "level_range"] = rt.loc[mask, "level_range"].apply(
-                    lambda lr: [i + 1, i + 1]
-                )
-                segments = rt.loc[mask, "segments"].sum()
-                mask = st["id"].isin(segments)
-                st.loc[mask, "level_range"] = st.loc[mask, "level_range"].apply(
-                    lambda lr: [i + 1, i + 1]
-                )
+                # Fill next layer
+                for rid in res["new_sub_regions"]:
+                    region = rt[rt["id"] == rid].iloc[0].to_dict()
+                    sis = st[st["id"].isin(region["segments"])].index.to_list()
+                    # If no sub-region exists, copy current region & segments to next layer
+                    if st.iloc[sis]["sub_regions"].apply(lambda rgs: rgs == []).all():
+                        mask = rt["id"] == region["id"]
+                        rt.loc[mask, "level_range"] = rt.loc[mask, "level_range"].apply(
+                            lambda lr: [i, i + 1]
+                        )
+                        st.loc[sis, "level_range"] = st.loc[sis, "level_range"].apply(
+                            lambda lr: [i, i + 1]
+                        )
+                    # Otherwise, fill next layer with child structure
+                    else:
+                        sub_regions = st.iloc[sis]["sub_regions"].sum()
+                        mask = rt["id"].isin(sub_regions)
+                        rt.loc[mask, "level_range"] = rt.loc[mask, "level_range"].apply(
+                            lambda lr: [i + 1, i + 1]
+                        )
+                        subrg_segments = rt.loc[
+                            rt["id"].isin(sub_regions), "segments"
+                        ].sum()
+                        mask = st["id"].isin(subrg_segments)
+                        st.loc[mask, "level_range"] = st.loc[mask, "level_range"].apply(
+                            lambda lr: [i + 1, i + 1]
+                        )
 
-            if len(r2bw_iranges) > 0:
-                rid_list = [rid for rid in rid_list if rid]
-                si = st[st["id"] == wrap_region.parent_segment].index.to_list()[0]
-                st.iat[si, st.columns.get_loc("sub_regions")] = rid_list
-
-            for rid in normal_regions:
-                region = rt[rt["id"] == rid].iloc[0].to_dict()
-                sis = st[st["id"].isin(region["segments"])].index.to_list()
-                # If no child segment exists, copy current region & segments to next layer
-                if st.iloc[sis]["sub_regions"].apply(lambda rgs: rgs == []).all():
-                    mask = rt["id"] == region["id"]
-                    rt.loc[mask, "level_range"] = rt.loc[mask, "level_range"].apply(
-                        lambda lr: [i, i + 1]
-                    )
-                    st.loc[sis, "level_range"] = st.loc[sis, "level_range"].apply(
-                        lambda lr: [i, i + 1]
-                    )
-                # Otherwise, replace current elements with child structure
-                else:
-                    sub_regions = st.iloc[sis]["sub_regions"].sum()
-                    mask = rt["id"].isin(sub_regions)
-                    rt.loc[mask, "level_range"] = rt.loc[mask, "level_range"].apply(
-                        lambda lr: [i + 1, i + 1]
-                    )
-                    subrg_segments = rt.loc[
-                        rt["id"].isin(sub_regions), "segments"
-                    ].sum()
-                    mask = st["id"].isin(subrg_segments)
-                    st.loc[mask, "level_range"] = st.loc[mask, "level_range"].apply(
-                        lambda lr: [i + 1, i + 1]
-                    )
+                # Mark default regions
+                if res["is_default"]:
+                    mask = rt["id"].isin(res["new_sub_regions"])
+                    rt.loc[mask, "is_default"] = True
 
         # Copy inherited elements directly to next layer
         ris = rt[rt["id"].isin(remaining_regions)].index.to_list()
         for ri in ris:
             segments = rt.iloc[ri]["segments"]
             sis = st[st["id"].isin(segments)].index.to_list()
-            level_range = rt.iat[ri, rt.columns.get_loc("level_range")]
-            level_range[1] = i + 1  # NOTE: update df cell in place
-            st.iloc[sis, st.columns.get_loc("level_range")] = st.iloc[
-                sis, st.columns.get_loc("level_range")
-            ].apply(lambda lr: level_range)
+            level_range = rt.at[ri, "level_range"]
+            level_range[1] = i + 1  # update region's `level_range` in place
+            st.loc[sis, "level_range"] = st.loc[sis, "level_range"].apply(
+                lambda lr: level_range
+            )
+
+    # Add `is_default` property for regions in the bottom layer
+    parent_segment_series = st[
+        st["level_range"].apply(
+            lambda lr: len(lr) > 0 and max_level - 1 >= lr[0] and max_level - 1 <= lr[1]
+        )
+        & (st["sub_regions"].apply(len) > 0)
+    ]["id"]
+    regions_with_child = rt[
+        rt["level_range"].apply(
+            lambda lr: len(lr) > 0 and max_level - 1 >= lr[0] and max_level - 1 <= lr[1]
+        )
+        & rt["segments"].apply(
+            lambda segs: not set(segs).isdisjoint(set(parent_segment_series))
+        )
+    ]
+    for parent_region in regions_with_child.itertuples():
+        first_segment_with_sub_regions = (
+            st[
+                (st["id"].isin(parent_region.segments))
+                & (st["sub_regions"].apply(len) > 0)
+            ]
+            .sort_values("rank")
+            .iloc[0]
+        )
+        mask = rt["id"].isin(first_segment_with_sub_regions["sub_regions"])
+        rt.loc[mask, "is_default"] = True
 
     # TODO: Find algorithm to unwrap all elements within max level limit
     if len(rt[rt["level_range"].apply(lambda lr: len(lr) == 0)]) > 0:
@@ -907,15 +1021,15 @@ def calculate_properties_r2l(regions: pd.DataFrame, segments: pd.DataFrame, meta
 
     # from root to leave
     root_ri = rt[rt["parent_segment"].isna()].index.to_list()[0]
-    root_rid = rt.iat[root_ri, rt.columns.get_loc("id")]
+    root_rid = rt.at[root_ri, "id"]
 
     # bootstrap properties for root region & segment
     totallen = meta["total_length"]
-    rt.iat[root_ri, rt.columns.get_loc("coordinate")] = [
+    rt.at[root_ri, "coordinate"] = [
         0,
         totallen,
     ]  # coordinate index
-    rt.iat[root_ri, rt.columns.get_loc("is_default")] = True  # default on display
+    rt.at[root_ri, "is_default"] = True  # default on display
     region_deque = collections.deque([root_rid])
 
     while len(region_deque) > 0:
@@ -925,10 +1039,10 @@ def calculate_properties_r2l(regions: pd.DataFrame, segments: pd.DataFrame, meta
 
         for sid in sids:
             si = st[st["id"] == sid].index.to_list()[0]
-            rids = st.iat[si, st.columns.get_loc("sub_regions")]
+            rids = st.at[si, "sub_regions"]
 
             # calculate coordinate index for child segments
-            length = int(st.iat[si, st.columns.get_loc("length")])
+            length = int(st.at[si, "length"])
             if length > parent_region["coordinate"][1] - parent_region["coordinate"][0]:
                 raise InternalError("Element attribute calculation error occured.")
             elif (
@@ -943,25 +1057,17 @@ def calculate_properties_r2l(regions: pd.DataFrame, segments: pd.DataFrame, meta
                     - length
                 )
                 start = parent_region["coordinate"][0] + math.floor(dlen / 2)
-            st.iat[si, st.columns.get_loc("coordinate")] = [
+            st.at[si, "coordinate"] = [
                 start,
                 start + length,
             ]
-
-            # judge if is default
-            # TODO: Fix method of defining `is_default`
-            segment_rank = st.iat[si, st.columns.get_loc("rank")]
-            ris = rt[rt["id"].isin(rids)].index.to_list()
-            rt.iloc[ris, rt.columns.get_loc("is_default")] = (
-                parent_region["is_default"] and segment_rank == 0
-            )
 
             for rid in rids:
                 ri = rt[rt["id"] == rid].index.to_list()[0]
 
                 # calculate coordinate index for child-child regions
-                length = int(rt.iat[ri, rt.columns.get_loc("length")])
-                rt.iat[ri, rt.columns.get_loc("coordinate")] = [
+                length = int(rt.at[ri, "length"])
+                rt.at[ri, "coordinate"] = [
                     start,
                     start + length,
                 ]
