@@ -6,8 +6,6 @@ Classes:
 """
 
 import os
-from re import S
-from typing import Optional
 
 import psycopg2
 import hap
@@ -30,11 +28,11 @@ class DatabaseConnectionInfo:
 
     def __init__(
         self,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
-        user: Optional[str] = None,
-        password: Optional[str] = None,
-        dbname: Optional[str] = None,
+        host: str = None,
+        port: int = None,
+        user: str = None,
+        password: str = None,
+        dbname: str = None,
     ):
         self.host = host
         self.port = port

@@ -1,5 +1,4 @@
 import collections
-import copy
 import functools
 import math
 import multiprocessing as mp
@@ -9,7 +8,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import Any, NamedTuple, Optional
+from typing import Any, NamedTuple
 
 import click
 import igraph as ig
@@ -1140,7 +1139,7 @@ def update_ids_by_subgraph(
     segments: pd.DataFrame,
     subgraph_id: int,
     db_connection: psycopg2.extensions.connection,
-    sequence_file: Optional[str] = None,
+    sequence_file: str = None,
 ):
     """Update IDs for regions and segments, and sequence file (if have) with
     subgraph ID."""
