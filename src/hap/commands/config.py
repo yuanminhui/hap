@@ -40,13 +40,13 @@ def main(key_to_get: str, key_value: list[str], key_to_unset: str, list_all: boo
 
     cfg = Config()
     try:
-        cfg.load_from_file(hap.CONFIG_FILE)
+        cfg.load_from_file(hap.CONFIG_PATH)
     except FileNotFoundError:
-        cfg_path = Path(hap.CONFIG_FILE)
+        cfg_path = Path(hap.CONFIG_PATH)
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         cfg_path.touch()
         cfg.data = {}
-        cfg.save_to_file(hap.CONFIG_FILE)
+        cfg.save_to_file(hap.CONFIG_PATH)
 
     if key_to_get:
         value = cfg.get_nested_value(key_to_get)
@@ -55,10 +55,10 @@ def main(key_to_get: str, key_value: list[str], key_to_unset: str, list_all: boo
     elif key_value:
         key_to_set, value_to_set = key_value
         cfg.set_nested_value(key_to_set, value_to_set)
-        cfg.save_to_file(hap.CONFIG_FILE)
+        cfg.save_to_file(hap.CONFIG_PATH)
     elif key_to_unset:
         cfg.unset_nested_value(key_to_unset)
-        cfg.save_to_file(hap.CONFIG_FILE)
+        cfg.save_to_file(hap.CONFIG_PATH)
     elif list_all:
         cfg.print_items()
 

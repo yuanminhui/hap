@@ -182,48 +182,48 @@ def test_get_connection_info_no_info(mock_config_empty, mocker):
 ### Test for function `test_connection` ###
 
 
-@pytest.fixture
-def mock_connection_info():
-    """Provide mock database connection information."""
-    return {
-        "host": "localhost",
-        "port": 5432,
-        "user": "test_user",
-        "password": "test_password",
-        "dbname": "test_db",
-    }
+# @pytest.fixture
+# def mock_connection_info():
+#     """Provide mock database connection information."""
+#     return {
+#         "host": "localhost",
+#         "port": 5432,
+#         "user": "test_user",
+#         "password": "test_password",
+#         "dbname": "test_db",
+#     }
 
 
-def test_test_connection_success(mock_connection_info, mocker):
-    """Test successful database connection."""
-    mock_connect = mocker.patch("psycopg2.connect")
-    connection_info = db.test_connection(mock_connection_info)
+# def test_test_connection_success(mock_connection_info, mocker):
+#     """Test successful database connection."""
+#     mock_connect = mocker.patch("psycopg2.connect")
+#     connection_info = db.test_connection(mock_connection_info)
 
-    mock_connect.assert_called_once_with(**mock_connection_info)
-    assert connection_info == mock_connection_info
-
-
-def test_test_connection_incomplete_info():
-    """Test connection with incomplete information raises ValueError."""
-    incomplete_info = {
-        "host": "localhost",
-        "user": "test_user",
-        # Missing 'port', 'password', and 'dbname'
-    }
-    with pytest.raises(ValueError):
-        db.test_connection(incomplete_info)
+#     mock_connect.assert_called_once_with(**mock_connection_info)
+#     assert connection_info == mock_connection_info
 
 
-def test_test_connection_failure(mock_connection_info, mocker):
-    """Test failure to connect raises psycopg2.OperationalError."""
-    mock_connect = mocker.patch(
-        "psycopg2.connect", side_effect=psycopg2.OperationalError
-    )
+# def test_test_connection_incomplete_info():
+#     """Test connection with incomplete information raises ValueError."""
+#     incomplete_info = {
+#         "host": "localhost",
+#         "user": "test_user",
+#         # Missing 'port', 'password', and 'dbname'
+#     }
+#     with pytest.raises(ValueError):
+#         db.test_connection(incomplete_info)
 
-    with pytest.raises(psycopg2.OperationalError):
-        db.test_connection(mock_connection_info)
 
-    mock_connect.assert_called_once_with(**mock_connection_info)
+# def test_test_connection_failure(mock_connection_info, mocker):
+#     """Test failure to connect raises psycopg2.OperationalError."""
+#     mock_connect = mocker.patch(
+#         "psycopg2.connect", side_effect=psycopg2.OperationalError
+#     )
+
+#     with pytest.raises(psycopg2.OperationalError):
+#         db.test_connection(mock_connection_info)
+
+#     mock_connect.assert_called_once_with(**mock_connection_info)
 
 
 ### Test for function `connect` ###

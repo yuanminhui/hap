@@ -16,7 +16,7 @@ from hap.lib.error import DataIncompleteError
 
 SCRIPT_NAME_CREATE_TABLES = "create_tables.sql"
 SCRIPT_PATH_CREATE_TABLES = os.path.join(
-    hap.PACKAGE_ROOT, "lib", SCRIPT_NAME_CREATE_TABLES
+    hap.SOURCE_ROOT, "sql", SCRIPT_NAME_CREATE_TABLES
 )
 
 
@@ -125,35 +125,35 @@ def get_connection_info() -> dict:
     conn_info_from_env = {k: v for k, v in db_conn_info.to_dict().items() if v}
 
     # Overwrite the values from config with values from env
-    db_conn_info.from_config(hap.CONFIG_FILE)
+    db_conn_info.from_config(hap.CONFIG_PATH)
     conn_info_from_config = db_conn_info.to_dict()
     conn_info_from_config.update(conn_info_from_env)
     return conn_info_from_config
 
 
-def test_connection(connection_info: dict) -> dict:
-    """
-    Test the connection to PostgreSQL by psycopg2.
+# def test_connection(connection_info: dict) -> dict:
+#     """
+#     Test the connection to PostgreSQL by psycopg2.
 
-    Args:
-        connection_info: A dictionary with the database connection information.
+#     Args:
+#         connection_info: A dictionary with the database connection information.
 
-    Returns:
-        dict: A dictionary with the database connection information.
+#     Returns:
+#         dict: A dictionary with the database connection information.
 
-    Raises:
-        DataIncompleteError: If the database connection information is incomplete.
-        psycopg2.OperationalError: If the connection to the database fails.
-    """
+#     Raises:
+#         DataIncompleteError: If the database connection information is incomplete.
+#         psycopg2.OperationalError: If the connection to the database fails.
+#     """
 
-    db_conn_info = DatabaseConnectionInfo()
-    db_conn_info.from_dict(connection_info)
-    if not db_conn_info.is_complete():
-        raise DataIncompleteError("Database connection information is incomplete.")
-    connection_info = db_conn_info.to_dict()
-    with psycopg2.connect(**connection_info):
-        pass
-    return connection_info
+#     db_conn_info = DatabaseConnectionInfo()
+#     db_conn_info.from_dict(connection_info)
+#     if not db_conn_info.is_complete():
+#         raise DataIncompleteError("Database connection information is incomplete.")
+#     connection_info = db_conn_info.to_dict()
+#     with psycopg2.connect(**connection_info):
+#         pass
+#     return connection_info
 
 
 def connect(connection_info: dict) -> psycopg2.extensions.connection:
@@ -171,6 +171,22 @@ def connect(connection_info: dict) -> psycopg2.extensions.connection:
     """
 
     return psycopg2.connect(**connection_info)
+
+
+def auto_connect() -> psycopg2.extensions.connection:
+    """
+    Connect to the database using the connection information from the environment
+    variables and configuration file.
+
+    Returns:
+        psycopg2.extensions.connection: A psycopg2 connection object.
+
+    Raises:
+        psycopg2.OperationalError: If the connection to the database fails.
+    """
+
+    connection_info = get_connection_info()
+    return connect(connection_info)
 
 
 def create_tables_if_not_exist(connection: psycopg2.extensions.connection):
@@ -214,29 +230,29 @@ def get_next_id_from_table(
         return max_id + 1 if max_id else 1
 
 
-# DEBUG
-if __name__ == "__main__":
-    os.environ["HAP_DB_HOST"] = "env_host"
-    os.environ["HAP_DB_PORT"] = "1234"
-    cfg = Config({})
-    cfg.set_nested_value("db.host", "cfg_host")
-    cfg.set_nested_value("db.port", "4321")
-    cfg.set_nested_value("db.user", "cfg_user")
-    cfg.set_nested_value("db.password", "cfg_password")
-    cfg.set_nested_value("db.dbname", "cfg_dbname")
-    cfg.save_to_file(hap.CONFIG_FILE)
-    get_connection_info()
-    os.environ.pop("HAP_DB_HOST")
-    os.environ.pop("HAP_DB_PORT")
-    cfg = Config(
-        {
-            "db": {
-                "host": "localhost",
-                "port": "5432",
-                "user": "hap",
-                "password": "hap",
-                "dbname": "hap",
-            }
-        }
-    )
-    cfg.save_to_file(hap.CONFIG_FILE)
+# # DEBUG
+# if __name__ == "__main__":
+#     os.environ["HAP_DB_HOST"] = "env_host"
+#     os.environ["HAP_DB_PORT"] = "1234"
+#     cfg = Config({})
+#     cfg.set_nested_value("db.host", "cfg_host")
+#     cfg.set_nested_value("db.port", "4321")
+#     cfg.set_nested_value("db.user", "cfg_user")
+#     cfg.set_nested_value("db.password", "cfg_password")
+#     cfg.set_nested_value("db.dbname", "cfg_dbname")
+#     cfg.save_to_file(hap.CONFIG_PATH)
+#     get_connection_info()
+#     os.environ.pop("HAP_DB_HOST")
+#     os.environ.pop("HAP_DB_PORT")
+#     cfg = Config(
+#         {
+#             "db": {
+#                 "host": "localhost",
+#                 "port": "5432",
+#                 "user": "hap",
+#                 "password": "hap",
+#                 "dbname": "hap",
+#             }
+#         }
+#     )
+#     cfg.save_to_file(hap.CONFIG_PATH)

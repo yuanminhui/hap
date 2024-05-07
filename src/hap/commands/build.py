@@ -25,17 +25,16 @@ from hap.lib.error import (
     DataInvalidError,
     DatabaseError,
     InternalError,
-    UnsupportedError,
 )
 from hap.lib.util_obj import ValidationResult
 
 
 # OPTIMIZE: Rewrite some DataFrame operations in a more efficient & elegant way
-# TODO: Build a class for the pangenome graph
-# TODO: Build a class for the hap
-# TODO: Organize the code into DDD-like structure
+# TODO: Refactor this command into data validation, data processing, and data output parts
+# TODO: Extract `main()` to a cli-lib-independent function which refered by `cli()`
 # TODO: Refactor the class utils to composition or inheritance
 # TODO: Change method for generating IDs to avoid conflicts
+# TODO: Add params and funcs for distinct / optional parts of the input pangenome graph
 
 # Incremental IDs for element names
 identifiers = {
@@ -1484,67 +1483,67 @@ def hap2db(
             conn.autocommit = True
 
 
-def export(
-    rt: pd.DataFrame,
-    st: pd.DataFrame,
-    meta: dict,
-    basepath: str,
-    format="st",
-):
-    """Export region-segment tree to assigned format."""
+# def export(
+#     rt: pd.DataFrame,
+#     st: pd.DataFrame,
+#     meta: dict,
+#     basepath: str,
+#     format="st",
+# ):
+#     """Export region-segment tree to assigned format."""
 
-    rt.drop(
-        [
-            "semantic_id",
-            "level_range",
-            "length",
-            "sources",
-            "is_variant",
-            "total_variants",
-            "min_length",
-            "before",
-            "after",
-        ],
-        axis=1,
-        inplace=True,
-    )
+#     rt.drop(
+#         [
+#             "semantic_id",
+#             "level_range",
+#             "length",
+#             "sources",
+#             "is_variant",
+#             "total_variants",
+#             "min_length",
+#             "before",
+#             "after",
+#         ],
+#         axis=1,
+#         inplace=True,
+#     )
 
-    if format == "st":
-        rt.rename(
-            columns={
-                "coordinate": "region_coordinate",
-                "type": "region_type",
-                "is_default": "region_is_default",
-            },
-            inplace=True,
-        )
-        st = st.merge(
-            rt.loc[
-                :,
-                [
-                    "segments",
-                    "region_coordinate",
-                    "parent_segment",
-                    "region_type",
-                    "region_is_default",
-                ],
-            ].explode("segments"),
-            left_on="id",
-            right_on="segments",
-            how="left",
-            suffixes=("", "_r"),
-        ).drop("segments", axis=1)
-        st.to_csv(basepath + ".st.tsv", sep="\t", na_rep="*", index=False)
+#     if format == "st":
+#         rt.rename(
+#             columns={
+#                 "coordinate": "region_coordinate",
+#                 "type": "region_type",
+#                 "is_default": "region_is_default",
+#             },
+#             inplace=True,
+#         )
+#         st = st.merge(
+#             rt.loc[
+#                 :,
+#                 [
+#                     "segments",
+#                     "region_coordinate",
+#                     "parent_segment",
+#                     "region_type",
+#                     "region_is_default",
+#                 ],
+#             ].explode("segments"),
+#             left_on="id",
+#             right_on="segments",
+#             how="left",
+#             suffixes=("", "_r"),
+#         ).drop("segments", axis=1)
+#         st.to_csv(basepath + ".st.tsv", sep="\t", na_rep="*", index=False)
 
-        meta["sources"] = ",".join(meta["sources"])
-        metasr = pd.Series(meta)
-        metasr.to_csv(basepath + ".meta.tsv", sep="\t", na_rep="*", header=False)
+#         meta["sources"] = ",".join(meta["sources"])
+#         metasr = pd.Series(meta)
+#         metasr.to_csv(basepath + ".meta.tsv", sep="\t", na_rep="*", header=False)
 
-    elif format == "rst":
-        rt.to_csv(basepath + ".rt.tsv", sep="\t", na_rep="*", index=False)
-        st.to_csv(basepath + ".st.tsv", sep="\t", na_rep="*", index=False)
-    else:
-        raise UnsupportedError("Unsupported output format.")
+#     elif format == "rst":
+#         rt.to_csv(basepath + ".rt.tsv", sep="\t", na_rep="*", index=False)
+#         st.to_csv(basepath + ".st.tsv", sep="\t", na_rep="*", index=False)
+#     else:
+#         raise UnsupportedError("Unsupported output format.")
 
 
 def validate_arg_path(
@@ -1602,9 +1601,7 @@ def check_name(name: str) -> bool:
 
     # Check if the name exists in the database
     try:
-        conn_info = db.get_connection_info()
-        conn_info = db.test_connection(conn_info)
-        with db.connect(conn_info) as conn:
+        with db.auto_connect() as conn:
             db.create_tables_if_not_exist(conn)
             with conn.cursor() as cursor:
                 cursor.execute("SELECT 1 FROM pangenome WHERE name = %s", (name,))
@@ -1737,9 +1734,7 @@ def main(
             "creater": creater,
             "description": description,
         }
-        conn_info = db.get_connection_info()
-        conn_info = db.test_connection(conn_info)
-        with db.connect(conn_info) as conn:
+        with db.auto_connect() as conn:
             hap2db(hap_info, sub_haps, conn)
     finally:
         if not from_subgraphs:

@@ -222,12 +222,14 @@ class GFA:
         if not self.contains_path():
             return []
 
-        awk_script_func = os.path.join(hap.PACKAGE_ROOT, "lib", "parse_pansn_str.awk")
+        awk_script_func = os.path.join(
+            hap.SOURCE_ROOT, "awk", "gfa", "parse_pansn_str.awk"
+        )
         awk_script_gfa1 = os.path.join(
-            hap.PACKAGE_ROOT, "lib", "extract_haplotype_names_gfa1.awk"
+            hap.SOURCE_ROOT, "awk", "gfa", "extract_haplotype_names_gfa1.awk"
         )
         awk_script_gfa2 = os.path.join(
-            hap.PACKAGE_ROOT, "lib", "extract_haplotype_names_gfa2.awk"
+            hap.SOURCE_ROOT, "awk", "gfa", "extract_haplotype_names_gfa2.awk"
         )
 
         cmd = ["awk", "-f", awk_script_func, "-f"]
@@ -317,7 +319,9 @@ class GFA:
             list[str]: The names of subgraphs.
         """
 
-        awk_script_file = os.path.join(hap.PACKAGE_ROOT, "lib", "parse_pansn_str.awk")
+        awk_script_file = os.path.join(
+            hap.SOURCE_ROOT, "awk", "gfa", "parse_pansn_str.awk"
+        )
 
         locale = ["LC_ALL=C"]
         grep = ["grep"]
@@ -372,10 +376,10 @@ class GFA:
         set_record_file, main_file = fileutil.create_tmp_files(2)
 
         awk_script_gfa1 = os.path.join(
-            hap.PACKAGE_ROOT, "lib", "extract_subgraph_gfa1.awk"
+            hap.SOURCE_ROOT, "awk", "gfa", "extract_subgraph_gfa1.awk"
         )
         awk_script_gfa2 = os.path.join(
-            hap.PACKAGE_ROOT, "lib", "extract_subgraph_gfa2.awk"
+            hap.SOURCE_ROOT, "awk", "gfa", "extract_subgraph_gfa2.awk"
         )
 
         # `grep` -- Get records that contain set of nodes from the whole graph by subgraph name
@@ -448,9 +452,11 @@ class GFA:
         info_file, node_file, edge_file, edge_tmp_file = fileutil.create_tmp_files(4)
 
         # Get awk scripts
-        awk_file_func = os.path.join(hap.PACKAGE_ROOT, "lib", "parse_pansn_str.awk")
-        awk_file_gfa1 = os.path.join(hap.PACKAGE_ROOT, "lib", "gfa12csv.awk")
-        awk_file_gfa2 = os.path.join(hap.PACKAGE_ROOT, "lib", "gfa22csv.awk")
+        awk_file_func = os.path.join(
+            hap.SOURCE_ROOT, "awk", "gfa", "parse_pansn_str.awk"
+        )
+        awk_file_gfa1 = os.path.join(hap.SOURCE_ROOT, "awk", "gfa", "gfa12csv.awk")
+        awk_file_gfa2 = os.path.join(hap.SOURCE_ROOT, "awk", "gfa", "gfa22csv.awk")
 
         # `awk` -- Convert the GFA format graph to CSV tables of nodes and edges, plus a info file
         awk = [
