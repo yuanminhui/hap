@@ -1657,6 +1657,11 @@ def get_username() -> str:
     help="Description of the Hierarchical Pangenome",
 )
 @click.option(
+    "--sequence-file",
+    type=click.Path(exists=True, path_type=pathlib.Path),
+    help="External node-sequence FASTA/FASTQ/TSV file.",
+)
+@click.option(
     "-s",
     "--from-subgraphs",
     is_flag=True,
@@ -1680,6 +1685,7 @@ def main(
     from_subgraphs: bool,
     contig: bool,
     min_res: float,
+    sequence_file: pathlib.Path = None,
 ):
     """
     Build a Hierarchical Pangenome from a pangenome graph in GFA format, and
@@ -1696,6 +1702,19 @@ def main(
             "The name is invalid or already exists in the database, please try another one."
         )
         name = click.prompt("Name of the HAP")
+
+    # Handle external sequence file
+    sequence_file_tsv = None
+    if sequence_file:
+        from hap.lib.sequence import fasta_to_tsv
+        import tempfile
+        if sequence_file.suffix.lower() in {".fa", ".fasta", ".fq", ".fastq"}:
+            tmp_tsv = tempfile.NamedTemporaryFile("w+", delete=False, suffix=".tsv")
+            fasta_to_tsv(sequence_file, tmp_tsv)
+            tmp_tsv.flush()
+            sequence_file_tsv = tmp_tsv.name
+        else:
+            sequence_file_tsv = str(sequence_file)
 
     # Subgraph as inputs
     if from_subgraphs:
