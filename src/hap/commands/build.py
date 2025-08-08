@@ -19,6 +19,7 @@ import hap
 from hap.lib import database as db
 from hap.lib import fileutil
 from hap.lib import gfa
+from hap.lib import io as seqio
 from hap.lib.elements import Region
 from hap.lib.elements import Segment
 from hap.lib.error import (
@@ -1081,6 +1082,7 @@ def build_subgraph(
     filepath: str,
     min_resolution: float,
     temp_dir: str,
+    external_sequence_tsv: str | None = None,
 ):
     """Build a subgraph from a validated GFA file (can be gzipped) for a Hierarchical Pangenome."""
 
@@ -1108,6 +1110,30 @@ def build_subgraph(
     rst = calculate_properties_r2l(*rst)
     rst[2]["name"] = subgraph_name
 
+    # If no embedded sequences but an external TSV is provided, filter it to this subgraph's nodes
+    if sequence_file is None and external_sequence_tsv is not None:
+        # Collect node IDs in this subgraph GFA
+        node_ids: set[str] = set()
+        with open(gfa_no_sequence, "r") as gf:
+            for line in gf:
+                if not line or line[0] != "S":
+                    continue
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) >= 2:
+                    node_ids.add(parts[1])
+        if node_ids:
+            basename = fileutil.remove_suffix_containing(os.path.basename(gfa_no_sequence), ".gfa")
+            out_tsv = os.path.join(temp_dir, f"{basename}.seq.tsv")
+            matched = 0
+            with open(external_sequence_tsv, "r") as infh, open(out_tsv, "w") as outfh:
+                for row in infh:
+                    rid, *rest = row.rstrip("\n").split("\t", 1)
+                    if rid in node_ids and rest:
+                        outfh.write(row)
+                        matched += 1
+            if matched > 0:
+                sequence_file = out_tsv
+
     return *rst, sequence_file
 
 
@@ -1115,6 +1141,7 @@ def build_subgraphs_in_parallel(
     subgraph_items: list[tuple[str, str]],
     min_resolution: float,
     temp_dir: str,
+    external_sequence_tsv: str | None = None,
 ):
     """Build Hierarchical Pangenome subgraphs in parallel for a list of GFA subgraphs."""
 
@@ -1122,6 +1149,7 @@ def build_subgraphs_in_parallel(
         build_subgraph,
         min_resolution=min_resolution,
         temp_dir=temp_dir,
+        external_sequence_tsv=external_sequence_tsv,
     )
 
     with mp.Pool() as pool:
@@ -1567,6 +1595,13 @@ def validate_arg_path(
                     )
             return value
     else:
+        # allow using --gfa instead of positional path
+        if len(value) == 0:
+            if context.params.get("gfa") is None:
+                raise click.BadParameter(
+                    "A GFA must be provided via positional PATH or --gfa."
+                )
+            return value
         if len(value) > 1:
             raise click.BadParameter(
                 "Building for more than one graph is not supported. use `-s/--from-subgraphs` if building from a group of subgraphs."
@@ -1625,7 +1660,7 @@ def get_username() -> str:
 @click.argument(
     "path",
     nargs=-1,
-    required=True,
+    required=False,
     type=click.Path(exists=True, path_type=pathlib.Path),
     callback=validate_arg_path,
 )
@@ -1670,6 +1705,12 @@ def get_username() -> str:
     default=0.04,
     help="Minimum resolution of the Hierarchical Pangenome, in bp/px",
 )
+@click.option("--gfa", "gfa_path", type=click.Path(exists=True, path_type=pathlib.Path))
+@click.option(
+    "--seqfile",
+    type=click.Path(exists=True, path_type=pathlib.Path),
+    help="External node-sequence FASTA/FASTQ.",
+)
 def main(
     ctx: click.Context,
     path: tuple[pathlib.Path],
@@ -1680,6 +1721,8 @@ def main(
     from_subgraphs: bool,
     contig: bool,
     min_res: float,
+    gfa_path: pathlib.Path | None,
+    seqfile: pathlib.Path | None,
 ):
     """
     Build a Hierarchical Pangenome from a pangenome graph in GFA format, and
@@ -1712,7 +1755,7 @@ def main(
         ]  # HACK: Assume the subgraph name is the second last part of the filename, without inner dots
         subgraph_items = list(zip(subgraph_names, subgraph_files))
     else:
-        gfa_file = path[0]
+        gfa_file = gfa_path if gfa_path is not None else path[0]
         gfa_obj = gfa.GFA(str(gfa_file))
         # Divide into subgraphs
         subgraph_dir = tempfile.mkdtemp(prefix="hap.", suffix=".subgraph")
@@ -1723,9 +1766,22 @@ def main(
 
     temp_dir = tempfile.mkdtemp(prefix="hap.", suffix=".out")
 
+    # Optional: external FASTA/FASTQ to TSV
+    external_sequence_tsv = None
+    if seqfile is not None:
+        ext_seq_path = os.path.join(temp_dir, "external.seq.tsv")
+        with open(ext_seq_path, "w") as outfh:
+            count = seqio.fasta_to_tsv(seqfile, outfh)
+        if count == 0:
+            click.echo("[WARN] No valid sequences in external file — ignoring", err=True)
+        else:
+            external_sequence_tsv = ext_seq_path
+
     # Build Hierachical Pangenomes
     try:
-        sub_haps = build_subgraphs_in_parallel(subgraph_items, min_res, temp_dir)
+        sub_haps = build_subgraphs_in_parallel(
+            subgraph_items, min_res, temp_dir, external_sequence_tsv
+        )
 
         # Save to database
         hap_info = {
