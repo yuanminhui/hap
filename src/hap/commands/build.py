@@ -18,7 +18,7 @@ import psycopg2
 import hap
 from hap.lib import database as db
 from hap.lib import fileutil
-from hap.lib import gfa
+from hap.lib import gfa as gfa_mod
 from hap.lib.elements import Region
 from hap.lib.elements import Segment
 from hap.lib.error import (
@@ -57,7 +57,7 @@ def get_id(type: str) -> str:
     return "-".join([prefix, str(identifiers[type])])
 
 
-def validate_gfa(gfa_obj: gfa.GFA) -> ValidationResult:
+def validate_gfa(gfa_obj: gfa_mod.GFA) -> ValidationResult:
     """Validate a GFA file for building."""
 
     if not gfa_obj.can_extract_length():
@@ -1087,7 +1087,7 @@ def build_subgraph(
     gfa_file = fileutil.ungzip_file(filepath) if filepath.endswith(".gz") else filepath
 
     try:
-        gfa_obj = gfa.GFA(gfa_file)
+        gfa_obj = gfa_mod.GFA(gfa_file)
         result = validate_gfa(gfa_obj)
         if not result.valid:
             raise DataInvalidError(result.message)
@@ -1097,7 +1097,7 @@ def build_subgraph(
             os.remove(gfa_file)
 
     # TODO: Add function to merge successive variation / consensus nodes
-    gfa_obj = gfa.GFA(gfa_no_sequence)
+    gfa_obj = gfa_mod.GFA(gfa_no_sequence)
     g = gfa_obj.to_igraph()
     result = validate_graph(g)
     if not result.valid:
@@ -1622,12 +1622,14 @@ def get_username() -> str:
     short_help="Build a Hierarchical Pangenome",
 )
 @click.pass_context
-@click.argument(
-    "path",
-    nargs=-1,
-    required=True,
+@click.option(
+    "--gfa",
     type=click.Path(exists=True, path_type=pathlib.Path),
-    callback=validate_arg_path,
+)
+@click.option(
+    "--seqfile",
+    type=click.Path(exists=True, path_type=pathlib.Path),
+    help="External node-sequence FASTA/FASTQ.",
 )
 @click.option(
     "-n",
@@ -1672,7 +1674,8 @@ def get_username() -> str:
 )
 def main(
     ctx: click.Context,
-    path: tuple[pathlib.Path],
+    gfa: pathlib.Path | None,
+    seqfile: pathlib.Path | None,
     name: str,
     clade: str,
     creater: str,
@@ -1699,21 +1702,12 @@ def main(
 
     # Subgraph as inputs
     if from_subgraphs:
-        if len(path) == 1:
-            subgraph_files = fileutil.get_files_from_dir(str(path[0]), "gfa")
-            if len(subgraph_files) == 0:
-                raise click.BadParameter(
-                    "No GFA files found in the specified directory."
-                )
-        else:
-            subgraph_files = [str(fp) for fp in path]
-        subgraph_names = [
-            os.path.basename(fp).split(".")[-2] for fp in subgraph_files
-        ]  # HACK: Assume the subgraph name is the second last part of the filename, without inner dots
-        subgraph_items = list(zip(subgraph_names, subgraph_files))
+        raise click.ClickException("--from-subgraphs mode currently requires positional PATH; not supported with --gfa.")
     else:
-        gfa_file = path[0]
-        gfa_obj = gfa.GFA(str(gfa_file))
+        if not gfa:
+            raise click.ClickException("--gfa is required when not using --from-subgraphs.")
+        gfa_file = gfa
+        gfa_obj = gfa_mod.GFA(str(gfa_file))
         # Divide into subgraphs
         subgraph_dir = tempfile.mkdtemp(prefix="hap.", suffix=".subgraph")
         subgraph_items = gfa_obj.divide_into_subgraphs(subgraph_dir, not contig)
@@ -1726,6 +1720,36 @@ def main(
     # Build Hierachical Pangenomes
     try:
         sub_haps = build_subgraphs_in_parallel(subgraph_items, min_res, temp_dir)
+
+        # If external sequence file provided, parse once and prepare per-subgraph TSVs
+        external_seq_map = None
+        if seqfile:
+            try:
+                from hap.lib.io import iter_fasta as _iter_fa, _clean as _clean_seq
+                seq_pairs = list(_iter_fa(seqfile))
+                external_seq_map = {
+                    hdr: s for hdr, raw in seq_pairs if (s := _clean_seq(raw, hdr))
+                }
+            except Exception as e:
+                raise click.ClickException(f"Failed to read --seqfile: {e}")
+
+        # If provided, override/attach per-subgraph sequence files using external mapping
+        if external_seq_map is not None:
+            from hap.lib import fileutil as _fu
+            sub_haps2 = []
+            for (regions, segments, meta, _seq_file) in sub_haps:
+                st = segments
+                # Compose per-subgraph TSV with only ids present in this subgraph
+                (tmp_tsv,) = _fu.create_tmp_files(1)
+                with open(tmp_tsv, "w") as out:
+                    # st['id'] are original segment ids for true nodes
+                    ids_in_sub = set(map(str, st["id"].tolist()))
+                    for sid in ids_in_sub:
+                        seq = external_seq_map.get(sid)
+                        if seq:
+                            out.write(f"{sid}\t{seq}\n")
+                sub_haps2.append((regions, segments, meta, tmp_tsv))
+            sub_haps = sub_haps2
 
         # Save to database
         hap_info = {
