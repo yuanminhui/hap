@@ -1055,10 +1055,10 @@ def calculate_properties_r2l(regions: pd.DataFrame, segments: pd.DataFrame, meta
                     - length
                 )
                 start = parent_region["coordinate"][0] + math.floor(dlen / 2)
-            st.at[si, "coordinate"] = [
-                start,
-                start + length,
-            ]
+            if length == 0:
+                st.at[si, "coordinate"] = [start, start + 1]  # workaround for recording coordinate of deletion segment
+            else:
+                st.at[si, "coordinate"] = [start, start + length]
 
             for rid in rids:
                 ri = rt[rt["id"] == rid].index.to_list()[0]
