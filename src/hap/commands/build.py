@@ -57,6 +57,96 @@ def get_id(type: str) -> str:
     return "-".join([prefix, str(identifiers[type])])
 
 
+# ===== Helpers for external sequence file integration =====
+
+def _gfa_segment_ids(gfa_path: str) -> set[str]:
+    """Collect segment IDs from `S` lines of a GFA file."""
+
+    ids: set[str] = set()
+    with open(gfa_path, "r") as fh:
+        for line in fh:
+            if line.startswith("S\t"):
+                parts = line.rstrip("\n").split("\t", 3)
+                if len(parts) >= 2:
+                    ids.add(parts[1])
+    return ids
+
+
+def _filter_tsv_by_ids(full_tsv_path: str, ids: set[str], out_tsv_path: str) -> dict[str, int]:
+    """Write `<id>\t<SEQ>` rows whose id is in `ids` to `out_tsv_path` and
+    return a mapping of id -> sequence length for those rows."""
+
+    id_to_len: dict[str, int] = {}
+    with open(full_tsv_path, "r") as inp, open(out_tsv_path, "w") as outp:
+        for line in inp:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            # Split once – sequence may contain tabs theoretically, but our TSV is 2-col
+            parts = line.split("\t", 1)
+            if len(parts) != 2:
+                continue
+            sid, seq = parts[0], parts[1]
+            if sid in ids:
+                outp.write(f"{sid}\t{seq}\n")
+                id_to_len[sid] = len(seq)
+    return id_to_len
+
+
+def _inject_ln_tags(gfa_path: str, id_to_len: dict[str, int]) -> None:
+    """Append `LN:i:<len>` to `S` lines using `id_to_len` and, when a sequence
+    field exists (GFA 1.x), replace it with `*` to mirror separate_sequence().
+    The file is modified in-place atomically."""
+
+    if not id_to_len:
+        # Nothing to add or modify
+        return
+
+    tmp_fd, tmp_path = tempfile.mkstemp(prefix="hap.", suffix=".gfa")
+    os.close(tmp_fd)
+    try:
+        with open(gfa_path, "r") as inp, open(tmp_path, "w") as outp:
+            for raw in inp:
+                if raw.startswith("S\t"):
+                    orig_line = raw.rstrip("\n")
+                    fields = orig_line.split("\t")
+                    if len(fields) >= 2:
+                        sid = fields[1]
+                        if sid in id_to_len:
+                            # Detect GFA2 style (S id len seq ...)
+                            is_gfa2_style = len(fields) >= 4 and fields[2].isdigit()
+                            if is_gfa2_style:
+                                # Keep length in field 3 as-is; clear sequence field (index 3) to '*'
+                                if fields[3] != "*":
+                                    fields[3] = "*"
+                                # Do NOT add LN tag for GFA2
+                                line = "\t".join(fields)
+                            else:
+                                # GFA1 style: add LN tag if missing and clear sequence field (index 2)
+                                if "\tLN:" not in orig_line:
+                                    orig_line = orig_line + f"\tLN:i:{id_to_len[sid]}"
+                                if len(fields) >= 3 and fields[2] != "*":
+                                    fields[2] = "*"
+                                    # Preserve tags beyond field 3 from the possibly LN-augmented line
+                                    # Re-split to capture appended tags
+                                    aug_fields = orig_line.split("\t")
+                                    tag_sub = "\t".join(aug_fields[3:]) if len(aug_fields) > 3 else ""
+                                    base = "\t".join(fields[:3])
+                                    line = base + ("\t" + tag_sub if tag_sub else "")
+                                else:
+                                    line = orig_line
+                            outp.write(line + "\n")
+                            continue
+                    # Fallthrough when sid not in map or malformed; just write as-is
+                    outp.write(raw)
+                else:
+                    outp.write(raw)
+        os.replace(tmp_path, gfa_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
 def validate_gfa(gfa_obj: gfa.GFA) -> ValidationResult:
     """Validate a GFA file for building."""
 
@@ -1081,6 +1171,7 @@ def build_subgraph(
     filepath: str,
     min_resolution: float,
     temp_dir: str,
+    external_sequence_tsv: str | None = None,
 ):
     """Build a subgraph from a validated GFA file (can be gzipped) for a Hierarchical Pangenome."""
 
@@ -1091,7 +1182,12 @@ def build_subgraph(
         result = validate_gfa(gfa_obj)
         if not result.valid:
             raise DataInvalidError(result.message)
-        gfa_no_sequence, sequence_file = gfa_obj.separate_sequence(temp_dir)
+        if external_sequence_tsv:
+            # Use provided per-subgraph sequence TSV; keep GFA as-is
+            gfa_no_sequence = gfa_file
+            sequence_file = external_sequence_tsv
+        else:
+            gfa_no_sequence, sequence_file = gfa_obj.separate_sequence(temp_dir)
     finally:
         if filepath.endswith(".gz"):
             os.remove(gfa_file)
@@ -1115,6 +1211,7 @@ def build_subgraphs_in_parallel(
     subgraph_items: list[tuple[str, str]],
     min_resolution: float,
     temp_dir: str,
+    sequence_file_by_graph: dict[str, str] | None = None,
 ):
     """Build Hierarchical Pangenome subgraphs in parallel for a list of GFA subgraphs."""
 
@@ -1124,10 +1221,18 @@ def build_subgraphs_in_parallel(
         temp_dir=temp_dir,
     )
 
+    # Prepare inputs with optional per-subgraph sequence TSV
+    if sequence_file_by_graph:
+        inputs = [
+            (name, fp, sequence_file_by_graph.get(fp)) for name, fp in subgraph_items
+        ]
+    else:
+        inputs = [(name, fp, None) for name, fp in subgraph_items]
+
     with mp.Pool() as pool:
         sub_haps = pool.starmap(
             partial_build_subgraph,
-            subgraph_items,
+            inputs,
         )
 
     return sub_haps
@@ -1742,9 +1847,27 @@ def main(
 
     temp_dir = tempfile.mkdtemp(prefix="hap.", suffix=".out")
 
+    # If an external sequence file is provided, prepare per-subgraph TSVs and inject LN tags
+    seq_map_by_gfa: dict[str, str] | None = None
+    if sequence_file_tsv:
+        seq_map_by_gfa = {}
+        for name, gfa_fp in subgraph_items:
+            # Subset sequences for this subgraph to avoid contaminating other subgraphs
+            out_tsv = os.path.join(
+                temp_dir, os.path.basename(gfa_fp).replace(".gfa", ".seq.tsv")
+            )
+            ids = _gfa_segment_ids(gfa_fp)
+            id_to_len = _filter_tsv_by_ids(sequence_file_tsv, ids, out_tsv)
+            # Add LN tags to GFA if missing, based on filtered TSV lengths
+            _inject_ln_tags(gfa_fp, id_to_len)
+            # Register for build & DB import
+            seq_map_by_gfa[gfa_fp] = out_tsv
+
     # Build Hierachical Pangenomes
     try:
-        sub_haps = build_subgraphs_in_parallel(subgraph_items, min_res, temp_dir)
+        sub_haps = build_subgraphs_in_parallel(
+            subgraph_items, min_res, temp_dir, seq_map_by_gfa
+        )
 
         # Save to database
         hap_info = {
