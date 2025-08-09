@@ -1081,17 +1081,90 @@ def build_subgraph(
     filepath: str,
     min_resolution: float,
     temp_dir: str,
+    external_sequence_tsv: str | None = None,
 ):
     """Build a subgraph from a validated GFA file (can be gzipped) for a Hierarchical Pangenome."""
 
     gfa_file = fileutil.ungzip_file(filepath) if filepath.endswith(".gz") else filepath
 
     try:
-        gfa_obj = gfa.GFA(gfa_file)
-        result = validate_gfa(gfa_obj)
-        if not result.valid:
-            raise DataInvalidError(result.message)
-        gfa_no_sequence, sequence_file = gfa_obj.separate_sequence(temp_dir)
+        if external_sequence_tsv:
+            # Use external sequences: create per-subgraph sequence TSV and a GFA-without-seq (add LN for GFA1)
+            base = fileutil.remove_suffix_containing(os.path.basename(gfa_file), ".gfa")
+            sequence_file = os.path.join(temp_dir, base + ".seq.tsv")
+            gfa_no_sequence = os.path.join(temp_dir, base + ".gfa")
+
+            # Extract node ids from subgraph GFA
+            node_list_file, len_map_file = fileutil.create_tmp_files(2)
+            try:
+                cmd_nodes = [
+                    "awk",
+                    r"""'BEGIN {FS = OFS = "\t"} /^S/ {print $2}'""",
+                    gfa_file,
+                    "|",
+                    "sort",
+                    "-u",
+                    ">",
+                    node_list_file,
+                ]
+                subprocess.run(" ".join(cmd_nodes), shell=True, executable="/bin/bash")
+
+                # Filter external sequence TSV to subgraph nodes
+                cmd_filter = [
+                    "awk",
+                    r"""'BEGIN {FS = OFS = "\t"} NR==FNR {a[$1]; next} ($1 in a) {print}'""",
+                    node_list_file,
+                    external_sequence_tsv,
+                    ">",
+                    sequence_file,
+                ]
+                subprocess.run(" ".join(cmd_filter), shell=True, executable="/bin/bash")
+
+                # Build length map from filtered TSV
+                cmd_len = [
+                    "awk",
+                    r"""'BEGIN {FS = OFS = "\t"} {print $1, length($2)}'""",
+                    sequence_file,
+                    ">",
+                    len_map_file,
+                ]
+                subprocess.run(" ".join(cmd_len), shell=True, executable="/bin/bash")
+
+                # Create GFA without sequences; add LN for GFA1
+                ver = gfa.GFA(gfa_file).version
+                if ver < 2:
+                    cmd_gfa1 = [
+                        "awk",
+                        r"""'BEGIN {FS = OFS = "\t"} NR==FNR {len[$1]=$2; next} /^S/ {sid=$2; if ($3 != "*") $3="*"; if (sid in len) { if ($0 ~ /\tLN:i:/) sub(/\tLN:i:[0-9]+/, "\tLN:i:" len[sid]); else $0 = $0 "\tLN:i:" len[sid] } } {print}'""",
+                        len_map_file,
+                        gfa_file,
+                        ">",
+                        gfa_no_sequence,
+                    ]
+                    subprocess.run(" ".join(cmd_gfa1), shell=True, executable="/bin/bash")
+                else:
+                    cmd_gfa2 = [
+                        "awk",
+                        r"""'BEGIN {FS = OFS = "\t"} /^S/ {$4="*"} {print}'""",
+                        gfa_file,
+                        ">",
+                        gfa_no_sequence,
+                    ]
+                    subprocess.run(" ".join(cmd_gfa2), shell=True, executable="/bin/bash")
+            finally:
+                fileutil.remove_files([node_list_file, len_map_file])
+
+            # Proceed with graph build using the modified GFA
+            gfa_obj = gfa.GFA(gfa_no_sequence)
+            result = validate_gfa(gfa_obj)
+            if not result.valid:
+                raise DataInvalidError(result.message)
+        else:
+            gfa_obj = gfa.GFA(gfa_file)
+            result = validate_gfa(gfa_obj)
+            if not result.valid:
+                raise DataInvalidError(result.message)
+            gfa_no_sequence, sequence_file = gfa_obj.separate_sequence(temp_dir)
     finally:
         if filepath.endswith(".gz"):
             os.remove(gfa_file)
@@ -1115,6 +1188,7 @@ def build_subgraphs_in_parallel(
     subgraph_items: list[tuple[str, str]],
     min_resolution: float,
     temp_dir: str,
+    external_sequence_tsv: str | None = None,
 ):
     """Build Hierarchical Pangenome subgraphs in parallel for a list of GFA subgraphs."""
 
@@ -1122,6 +1196,7 @@ def build_subgraphs_in_parallel(
         build_subgraph,
         min_resolution=min_resolution,
         temp_dir=temp_dir,
+        external_sequence_tsv=external_sequence_tsv,
     )
 
     with mp.Pool() as pool:
@@ -1744,7 +1819,9 @@ def main(
 
     # Build Hierachical Pangenomes
     try:
-        sub_haps = build_subgraphs_in_parallel(subgraph_items, min_res, temp_dir)
+        sub_haps = build_subgraphs_in_parallel(
+            subgraph_items, min_res, temp_dir, sequence_file_tsv
+        )
 
         # Save to database
         hap_info = {
