@@ -1850,6 +1850,10 @@ def main(
     # Handle external sequence file
     sequence_file_tsv = None
     if sequence_file:
+        if sequence_file.is_dir():
+            raise click.BadParameter(
+                "--sequence-file must be a single file. Multiple external sequence files are not supported; please merge them into one FASTA/FASTQ/TSV."
+            )
         from hap.lib.sequence import fasta_to_tsv
         import tempfile
         if sequence_file.suffix.lower() in {".fa", ".fasta", ".fq", ".fastq"}:
