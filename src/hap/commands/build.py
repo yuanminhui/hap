@@ -147,6 +147,35 @@ def _inject_ln_tags(gfa_path: str, id_to_len: dict[str, int]) -> None:
             os.remove(tmp_path)
 
 
+def _validate_gfa_lengths_complete(gfa_path: str) -> None:
+    """Ensure for GFA1.x every `S` line has LN tag. Raise on missing."""
+
+    missing: list[str] = []
+    with open(gfa_path, "r") as fh:
+        for line in fh:
+            if not line.startswith("S\t"):
+                continue
+            if "\tLN:" in line:
+                continue
+            # If appears GFA2-style S line (S id len seq), skip check
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) >= 4 and parts[2].isdigit():
+                # GFA2
+                continue
+            # Otherwise treat as GFA1 missing LN
+            if len(parts) >= 2:
+                missing.append(parts[1])
+            else:
+                missing.append("<unknown>")
+    if missing:
+        # Limit the display count to avoid huge messages
+        preview = ", ".join(missing[:10]) + (" ..." if len(missing) > 10 else "")
+        raise click.BadParameter(
+            f"Missing LN tag for {len(missing)} segment(s) in GFA: {preview}. "
+            "Provide sequences for these IDs or include LN:i:<len> in GFA."
+        )
+
+
 def validate_gfa(gfa_obj: gfa.GFA) -> ValidationResult:
     """Validate a GFA file for building."""
 
@@ -1178,14 +1207,31 @@ def build_subgraph(
     gfa_file = fileutil.ungzip_file(filepath) if filepath.endswith(".gz") else filepath
 
     try:
-        gfa_obj = gfa.GFA(gfa_file)
+        # If external sequence is provided, prepare per-subgraph TSV and inject LN/toggle seq field
+        if external_sequence_tsv:
+            # Work on a private copy to avoid mutating user-provided GFA files
+            basename = os.path.basename(gfa_file)
+            working_gfa = os.path.join(temp_dir, basename)
+            shutil.copyfile(gfa_file, working_gfa)
+            # Derive IDs present in this subgraph
+            ids = _gfa_segment_ids(working_gfa)
+            # Prepare per-subgraph TSV path under temp_dir
+            seq_tsv = os.path.join(
+                temp_dir, basename.replace(".gfa", ".seq.tsv")
+            )
+            id_to_len = _filter_tsv_by_ids(external_sequence_tsv, ids, seq_tsv)
+            # Inject LN and clear sequence fields where applicable
+            _inject_ln_tags(working_gfa, id_to_len)
+            # Validate completeness for GFA1.x
+            _validate_gfa_lengths_complete(working_gfa)
+
+        gfa_obj = gfa.GFA(working_gfa if external_sequence_tsv else gfa_file)
         result = validate_gfa(gfa_obj)
         if not result.valid:
             raise DataInvalidError(result.message)
         if external_sequence_tsv:
-            # Use provided per-subgraph sequence TSV; keep GFA as-is
             gfa_no_sequence = gfa_file
-            sequence_file = external_sequence_tsv
+            sequence_file = seq_tsv
         else:
             gfa_no_sequence, sequence_file = gfa_obj.separate_sequence(temp_dir)
     finally:
@@ -1211,7 +1257,7 @@ def build_subgraphs_in_parallel(
     subgraph_items: list[tuple[str, str]],
     min_resolution: float,
     temp_dir: str,
-    sequence_file_by_graph: dict[str, str] | None = None,
+    external_sequence_tsv: str | None = None,
 ):
     """Build Hierarchical Pangenome subgraphs in parallel for a list of GFA subgraphs."""
 
@@ -1219,20 +1265,13 @@ def build_subgraphs_in_parallel(
         build_subgraph,
         min_resolution=min_resolution,
         temp_dir=temp_dir,
+        external_sequence_tsv=external_sequence_tsv,
     )
-
-    # Prepare inputs with optional per-subgraph sequence TSV
-    if sequence_file_by_graph:
-        inputs = [
-            (name, fp, sequence_file_by_graph.get(fp)) for name, fp in subgraph_items
-        ]
-    else:
-        inputs = [(name, fp, None) for name, fp in subgraph_items]
 
     with mp.Pool() as pool:
         sub_haps = pool.starmap(
             partial_build_subgraph,
-            inputs,
+            subgraph_items,
         )
 
     return sub_haps
@@ -1847,26 +1886,10 @@ def main(
 
     temp_dir = tempfile.mkdtemp(prefix="hap.", suffix=".out")
 
-    # If an external sequence file is provided, prepare per-subgraph TSVs and inject LN tags
-    seq_map_by_gfa: dict[str, str] | None = None
-    if sequence_file_tsv:
-        seq_map_by_gfa = {}
-        for name, gfa_fp in subgraph_items:
-            # Subset sequences for this subgraph to avoid contaminating other subgraphs
-            out_tsv = os.path.join(
-                temp_dir, os.path.basename(gfa_fp).replace(".gfa", ".seq.tsv")
-            )
-            ids = _gfa_segment_ids(gfa_fp)
-            id_to_len = _filter_tsv_by_ids(sequence_file_tsv, ids, out_tsv)
-            # Add LN tags to GFA if missing, based on filtered TSV lengths
-            _inject_ln_tags(gfa_fp, id_to_len)
-            # Register for build & DB import
-            seq_map_by_gfa[gfa_fp] = out_tsv
-
     # Build Hierachical Pangenomes
     try:
         sub_haps = build_subgraphs_in_parallel(
-            subgraph_items, min_res, temp_dir, seq_map_by_gfa
+            subgraph_items, min_res, temp_dir, sequence_file_tsv
         )
 
         # Save to database
