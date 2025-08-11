@@ -36,6 +36,7 @@ class GFA:
         can_extract_length(self) -> bool: Check if the GFA file can extract length from sequence record.
         get_haplotypes(self) -> list[str]: Get the haplotypes from the GFA file.
         separate_sequence(self, output_dir: str): Move the sequences in segment records to `{basename}.seq.tsv`, leaving a `*` as placeholder, add `LN` tag if not exist, and return the file paths of the modified GFA file and the sequence file (if exists).
+        ensure_length_completeness(self): Ensure all `S` records have length info: for GFA 1.x this means `LN` is present; for GFA 2.x length field exists by spec.
         extract_subgraph_names(self, chr_only: bool = True) -> list[str]: Extract the names of subgraphs from the GFA file.
         extract_subgraph_by_name(self, name: str, output_file: str = ""): Extract a subgraph by name from the GFA file, returning the sub-GFA's file path.
         divide_into_subgraphs(self, output_dir: str = "", chr_only: bool = True) -> list[tuple[str, str]]: Divide the GFA file into subgraphs by informative labels, saving the subgraphs into the output directory.
@@ -209,6 +210,41 @@ class GFA:
             return True
         else:
             return False
+
+    def ensure_length_completeness(self) -> None:
+        """Ensure that each segment record has valid length information.
+
+        For GFA 1.x, this requires that each `S` line contains an `LN` tag.
+        For GFA 2.x, the length field is part of the specification and this
+        check is a no-op.
+
+        Raises:
+            hap.lib.error.DataIncompleteError: If any GFA 1.x `S` record lacks an `LN` tag.
+        """
+
+        # GFA2 has a dedicated length field; nothing to validate here
+        if self.version >= 2.0:
+            return
+
+        missing: list[str] = []
+        with open(self.filepath, "r") as fh:
+            for line in fh:
+                if not line.startswith("S\t"):
+                    continue
+                if "\tLN:" in line:
+                    continue
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) >= 2:
+                    missing.append(parts[1])
+                else:
+                    missing.append("<unknown>")
+        if missing:
+            preview = ", ".join(missing[:10]) + (" ..." if len(missing) > 10 else "")
+            from hap.lib.error import DataIncompleteError
+            raise DataIncompleteError(
+                f"Missing LN tag for {len(missing)} segment(s) in GFA: {preview}. "
+                "Provide sequences for these IDs or include LN:i:<len> in GFA."
+            )
 
     def get_haplotypes(self) -> list[str]:
         """Get the haplotypes from the GFA file. Haplotypes are extracted from

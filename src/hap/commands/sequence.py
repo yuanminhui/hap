@@ -1,53 +1,86 @@
 import click
 from pathlib import Path
-from typing import Optional, List
-from hap.lib.sequence import iter_fasta, _clean, fasta_to_tsv, tsv_to_fasta
+from typing import Optional, List, Dict
+from hap.lib.sequence import (
+    read_sequences_from_fasta,
+    sanitize_sequence,
+    write_fasta_or_fastq_to_tsv,
+    write_tsv_to_fasta,
+)
 from hap.lib import database as db
+import hap
 import psycopg2
 
-@click.group()
-def main():
-    """Sequence management commands."""
-    pass
 
-def resolve_one(conn, ext_id: str) -> Optional[int]:
-    """Resolve ext_id to segment.id (numeric)."""
+@click.group(
+    "sequence",
+    context_settings=hap.CTX_SETTINGS,
+    short_help="Sequence management commands",
+)
+def main():
+    """Manage segment sequences in the database."""
+
+
+def resolve_segment_id(conn, external_id: str) -> Optional[int]:
+    """Resolve a semantic or original segment identifier to internal numeric id."""
+
     with conn.cursor() as cur:
-        cur.execute("SELECT id FROM segment WHERE semantic_id = %s", (ext_id,))
+        cur.execute("SELECT id FROM segment WHERE semantic_id = %s", (external_id,))
         row = cur.fetchone()
         if row:
             return row[0]
-        cur.execute("SELECT id FROM segment_original_id WHERE original_id = %s", (ext_id,))
+        cur.execute(
+            "SELECT id FROM segment_original_id WHERE original_id = %s",
+            (external_id,),
+        )
         row = cur.fetchone()
         if row:
             return row[0]
     return None
 
-def resolve_many(conn, ext_ids: List[str]) -> dict:
-    """Resolve many ext_ids to segment.id (numeric)."""
-    result = {}
+
+def resolve_segment_ids(conn, external_ids: List[str]) -> Dict[str, int]:
+    """Resolve many semantic/original ids to internal segment ids."""
+
+    result: Dict[str, int] = {}
     with conn.cursor() as cur:
-        cur.execute("SELECT semantic_id, id FROM segment WHERE semantic_id = ANY(%s)", (ext_ids,))
+        cur.execute(
+            "SELECT semantic_id, id FROM segment WHERE semantic_id = ANY(%s)",
+            (external_ids,),
+        )
         for sid, id_ in cur.fetchall():
             result[sid] = id_
-        unresolved = [x for x in ext_ids if x not in result]
+        unresolved = [x for x in external_ids if x not in result]
         if unresolved:
-            cur.execute("SELECT original_id, id FROM segment_original_id WHERE original_id = ANY(%s)", (unresolved,))
+            cur.execute(
+                "SELECT original_id, id FROM segment_original_id WHERE original_id = ANY(%s)",
+                (unresolved,),
+            )
             for oid, id_ in cur.fetchall():
                 result[oid] = id_
     return result
 
+
 @main.command()
-@click.option("--fasta", type=click.Path(exists=True, path_type=Path), required=True, help="FASTA/FASTQ file to import.")
-def add(fasta):
-    """Bulk import sequences from FASTA/FASTQ."""
+@click.option(
+    "--fasta",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="FASTA/FASTQ file to import.",
+)
+def add(fasta: Path):
+    """Bulk import sequences from FASTA/FASTQ into the database."""
+
     conn = db.auto_connect()
-    seqs = list(iter_fasta(fasta))
+    seqs = list(read_sequences_from_fasta(fasta))
     ext_ids = [hdr for hdr, _ in seqs]
-    id_map = resolve_many(conn, ext_ids)
+    id_map = resolve_segment_ids(conn, ext_ids)
     # Fetch existing lengths
     with conn.cursor() as cur:
-        cur.execute("SELECT id, length FROM segment WHERE id = ANY(%s)", (list(id_map.values()),))
+        cur.execute(
+            "SELECT id, length FROM segment WHERE id = ANY(%s)",
+            (list(id_map.values()),),
+        )
         lengths = dict(cur.fetchall())
     valid = []
     for hdr, raw in seqs:
@@ -55,47 +88,65 @@ def add(fasta):
         if not seg_id:
             click.echo(f"[WARN] {hdr}: not found in DB – skipped", err=True)
             continue
-        seq = _clean(raw, hdr)
+        seq = sanitize_sequence(raw, hdr)
         if not seq:
             continue
         l = lengths.get(seg_id)
         if l is not None and l != len(seq):
-            click.echo(f"[WARN] {hdr}: length mismatch (DB: {l}, input: {len(seq)}) – skipped", err=True)
+            click.echo(
+                f"[WARN] {hdr}: length mismatch (DB: {l}, input: {len(seq)}) – skipped",
+                err=True,
+            )
             continue
         valid.append((seg_id, seq))
     # Write to DB
     with conn.cursor() as cur:
         for seg_id, seq in valid:
-            cur.execute("INSERT INTO segment_sequence (id, segment_sequence) VALUES (%s, %s) ON CONFLICT (id) DO UPDATE SET segment_sequence = EXCLUDED.segment_sequence", (seg_id, seq))
+            cur.execute(
+                "INSERT INTO segment_sequence (id, segment_sequence) VALUES (%s, %s) "
+                "ON CONFLICT (id) DO UPDATE SET segment_sequence = EXCLUDED.segment_sequence",
+                (seg_id, seq),
+            )
             # If length is NULL, update it
-            cur.execute("UPDATE segment SET length = %s WHERE id = %s AND length IS NULL", (len(seq), seg_id))
+            cur.execute(
+                "UPDATE segment SET length = %s WHERE id = %s AND length IS NULL",
+                (len(seq), seg_id),
+            )
     conn.commit()
     click.echo(f"Imported {len(valid)} sequences.")
+
 
 @main.command()
 @click.argument("ids", nargs=-1)
 @click.option("--regex", type=str, help="Regex for semantic_id or original_id.")
 @click.option("--format", "fmt", type=click.Choice(["tsv", "fasta"]), default="tsv")
-def get(ids, regex, fmt):
+def get(ids: tuple[str, ...], regex: str, fmt: str):
     """Get sequences by ID(s) or regex."""
+
     conn = db.auto_connect()
     out = []
     with conn.cursor() as cur:
         if regex:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT s.semantic_id, sq.segment_sequence
                 FROM segment s
                 JOIN segment_sequence sq ON s.id = sq.id
                 LEFT JOIN segment_original_id so ON s.id = so.id
                 WHERE s.semantic_id ~ %s OR so.original_id ~ %s
-            """, (regex, regex))
+                """,
+                (regex, regex),
+            )
             out = cur.fetchall()
         elif ids:
-            id_map = resolve_many(conn, list(ids))
+            id_map = resolve_segment_ids(conn, list(ids))
             if not id_map:
                 click.echo("No valid IDs found.", err=True)
                 return
-            cur.execute("SELECT semantic_id, segment_sequence FROM segment JOIN segment_sequence USING (id) WHERE id = ANY(%s)", (list(id_map.values()),))
+            cur.execute(
+                "SELECT semantic_id, segment_sequence FROM segment JOIN segment_sequence USING (id) WHERE id = ANY(%s)",
+                (list(id_map.values()),),
+            )
             out = cur.fetchall()
         else:
             click.echo("No IDs or regex provided.", err=True)
@@ -107,17 +158,19 @@ def get(ids, regex, fmt):
         for sid, seq in out:
             click.echo(f">{sid}\n{seq}")
 
+
 @main.command()
 @click.argument("id")
 @click.argument("newseq")
-def edit(id, newseq):
-    """Edit a sequence for a given ID."""
+def edit(id: str, newseq: str):
+    """Edit a sequence for a given segment ID."""
+
     conn = db.auto_connect()
-    seg_id = resolve_one(conn, id)
+    seg_id = resolve_segment_id(conn, id)
     if not seg_id:
         click.echo(f"[ERROR] {id}: not found in DB", err=True)
         return
-    seq = _clean(newseq, id)
+    seq = sanitize_sequence(newseq, id)
     if not seq:
         return
     with conn.cursor() as cur:
@@ -125,23 +178,37 @@ def edit(id, newseq):
         row = cur.fetchone()
         l = row[0] if row else None
         if l is not None and l != len(seq):
-            click.echo(f"[ERROR] {id}: length mismatch (DB: {l}, input: {len(seq)})", err=True)
+            click.echo(
+                f"[ERROR] {id}: length mismatch (DB: {l}, input: {len(seq)})",
+                err=True,
+            )
             return
-        cur.execute("INSERT INTO segment_sequence (id, segment_sequence) VALUES (%s, %s) ON CONFLICT (id) DO UPDATE SET segment_sequence = EXCLUDED.segment_sequence", (seg_id, seq))
-        cur.execute("UPDATE segment SET length = %s WHERE id = %s AND length IS NULL", (len(seq), seg_id))
+        cur.execute(
+            "INSERT INTO segment_sequence (id, segment_sequence) VALUES (%s, %s) ON CONFLICT (id) DO UPDATE SET segment_sequence = EXCLUDED.segment_sequence",
+            (seg_id, seq),
+        )
+        cur.execute(
+            "UPDATE segment SET length = %s WHERE id = %s AND length IS NULL",
+            (len(seq), seg_id),
+        )
     conn.commit()
     click.echo(f"Edited sequence for {id}.")
 
+
 @main.command()
 @click.argument("ids", nargs=-1)
-def delete(ids):
+def delete(ids: tuple[str, ...]):
     """Delete sequences by ID(s)."""
+
     conn = db.auto_connect()
-    id_map = resolve_many(conn, list(ids))
+    id_map = resolve_segment_ids(conn, list(ids))
     if not id_map:
         click.echo("No valid IDs found.", err=True)
         return
     with conn.cursor() as cur:
-        cur.execute("DELETE FROM segment_sequence WHERE id = ANY(%s)", (list(id_map.values()),))
+        cur.execute(
+            "DELETE FROM segment_sequence WHERE id = ANY(%s)",
+            (list(id_map.values()),),
+        )
     conn.commit()
     click.echo(f"Deleted {len(id_map)} sequences.")
