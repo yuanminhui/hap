@@ -109,9 +109,8 @@ class DatabaseConnectionInfo:
 
 def get_connection_info() -> dict:
     """
-    Get the database connection information from a mix of environment variables
-    and configuration file. Values from environment variables can be incomplete
-    or missing, and the lack of values is compensated by the configuration file.
+    Get the database connection information from environment variables
+    and configuration file. Environment variables override config values.
 
     Returns:
         A dictionary with the database connection information.
@@ -120,15 +119,36 @@ def get_connection_info() -> dict:
         FileNotFoundError: If the configuration file is not found.
     """
 
-    db_conn_info = DatabaseConnectionInfo()
-    db_conn_info.from_env()
-    conn_info_from_env = {k: v for k, v in db_conn_info.to_dict().items() if v}
+    # Read from config file first
+    cfg = Config()
+    try:
+        cfg.load_from_file(hap.CONFIG_PATH)
+    except FileNotFoundError:
+        # Mirror previous behavior: propagate FileNotFoundError to caller
+        raise
 
-    # Overwrite the values from config with values from env
-    db_conn_info.from_config(hap.CONFIG_PATH)
-    conn_info_from_config = db_conn_info.to_dict()
-    conn_info_from_config.update(conn_info_from_env)
-    return conn_info_from_config
+    conn_info_from_config = {
+        "host": cfg.get_nested_value("db.host"),
+        "port": int(cfg.get_nested_value("db.port")) if cfg.get_nested_value("db.port") else None,
+        "user": cfg.get_nested_value("db.user"),
+        "password": cfg.get_nested_value("db.password"),
+        "dbname": cfg.get_nested_value("db.dbname"),
+    }
+
+    # Overlay with environment variables (use os.getenv to avoid os.environ monkeypatch issues)
+    conn_info_from_env = {
+        "host": os.getenv("HAP_DB_HOST") or None,
+        "port": int(os.getenv("HAP_DB_PORT")) if os.getenv("HAP_DB_PORT") else None,
+        "user": os.getenv("HAP_DB_USER") or None,
+        "password": os.getenv("HAP_DB_PASSWORD") or None,
+        "dbname": os.getenv("HAP_DB_DBNAME") or None,
+    }
+
+    result = conn_info_from_config
+    for k, v in conn_info_from_env.items():
+        if v is not None:
+            result[k] = v
+    return result
 
 
 # def test_connection(connection_info: dict) -> dict:
@@ -201,10 +221,15 @@ def create_tables_if_not_exist(connection: psycopg2.extensions.connection):
         OSError: If the SQL file with the table creation statements is not found.
     """
 
-    with connection.cursor() as cursor:
+    cursor = connection.cursor()
+    try:
         with open(SCRIPT_PATH_CREATE_TABLES, "r") as file:
-            cursor.execute(file.read())
+            sql_text = file.read()
+        cursor.execute(sql_text)
         connection.commit()
+    except psycopg2.Error:
+        connection.rollback()
+        raise
 
 
 def get_next_id_from_table(
@@ -226,8 +251,9 @@ def get_next_id_from_table(
 
     with connection.cursor() as cursor:
         cursor.execute(f"SELECT MAX(id) FROM {table_name}")
-        max_id = cursor.fetchone()[0]
-        return max_id + 1 if max_id else 1
+        row = cursor.fetchone()
+        max_id = row[0] if row else None
+        return (max_id + 1) if max_id else 1
 
 
 # # DEBUG
