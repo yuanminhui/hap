@@ -10,8 +10,8 @@ from hap.lib.util_obj import ValidationResult
 
 
 @pytest.fixture(scope="session")
-def gfa_abs(ensure_abs_gfa_path) -> Path:
-    return ensure_abs_gfa_path
+def gfa_abs(prepare_mini_example_files) -> Path:
+    return prepare_mini_example_files["mirror_gfa"]
 
 
 def _fake_conn_ctx():
@@ -45,13 +45,10 @@ def _fake_conn_ctx():
 
 
 @pytest.mark.parametrize(
-    "extra_opts",
-    [
-        [],
-        ["--sequence-file"],
-    ],
+    "with_nodes",
+    [False, True],
 )
-def test_build_e2e_minimal(monkeypatch, gfa_abs: Path, extra_opts: list[str]):
+def test_build_e2e_minimal(monkeypatch, gfa_abs: Path, with_nodes: bool, prepare_mini_example_files):
     # Import live modules
     build = importlib.import_module("hap.commands.build")
     gfa = importlib.import_module("hap.lib.gfa")
@@ -109,12 +106,9 @@ def test_build_e2e_minimal(monkeypatch, gfa_abs: Path, extra_opts: list[str]):
         "-x",
         "desc",
     ]
-    if extra_opts:
-        # for paramized case with --sequence-file, use a dummy fasta file
-        if extra_opts == ["--sequence-file"]:
-            tmp_fa = gfa_abs.parent / "tmp.fa"
-            tmp_fa.write_text(">n1\nA\n")
-            args.extend(["--sequence-file", str(tmp_fa)])
+    if with_nodes:
+        nodes_fa = prepare_mini_example_files["mirror_nodes"]
+        args.extend(["--sequence-file", str(nodes_fa)])
 
     r = CliRunner().invoke(cli, args)
     assert r.exit_code == 0

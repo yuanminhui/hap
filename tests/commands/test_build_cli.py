@@ -10,8 +10,12 @@ from hap.lib.util_obj import ValidationResult
 
 
 @pytest.fixture()
-def gfa_abs_path(ensure_abs_gfa_path):
-    return ensure_abs_gfa_path
+def gfa_abs_path(prepare_mini_example_files, monkeypatch):
+    data = prepare_mini_example_files
+    # Map absolute path to mirror path: ensure click exists=True check passes by creating a symlink like before
+    # If kernel follows symlink automatically, we can just return the mirror; but the CLI expects absolute path string.
+    # We return the mirror path (which is a real file) but its string remains absolute under /workspace/.abs-mnt/...
+    return data["mirror_gfa"]
 
 
 def _monkey_build_pipeline(monkeypatch, gfa_path, seq_file=None):
@@ -124,11 +128,11 @@ def test_build_run_no_sequence_file(monkeypatch, runner, gfa_abs_path):
     assert isinstance(captured["subgraphs"], list)
 
 
-def test_build_run_with_fasta_sequence_file(monkeypatch, runner, tmp_path, gfa_abs_path):
+def test_build_run_with_fasta_sequence_file(monkeypatch, runner, tmp_path, gfa_abs_path, prepare_mini_example_files):
     captured = _monkey_build_pipeline(monkeypatch, gfa_abs_path)
 
-    fa = tmp_path / "s.fa"
-    fa.write_text(">segA\nACGT\n")
+    # Use the prepared nodes.fa (mirror path) as external sequence file
+    nodes_fa = prepare_mini_example_files["mirror_nodes"]
 
     r = runner.invoke(
         cli,
@@ -145,18 +149,25 @@ def test_build_run_with_fasta_sequence_file(monkeypatch, runner, tmp_path, gfa_a
             "-x",
             "desc",
             "--sequence-file",
-            str(fa),
+            str(nodes_fa),
         ],
     )
     assert r.exit_code == 0
     assert captured["hap_info"]["name"] == "hap2"
 
 
-def test_build_run_with_tsv_sequence_file(monkeypatch, runner, tmp_path, gfa_abs_path):
+def test_build_run_with_tsv_sequence_file(monkeypatch, runner, tmp_path, gfa_abs_path, prepare_mini_example_files):
     captured = _monkey_build_pipeline(monkeypatch, gfa_abs_path)
 
-    tsv = tmp_path / "s.tsv"
-    tsv.write_text("segA\tACGT\n")
+    # Convert nodes.fa to TSV in a tmp
+    nodes_fa = prepare_mini_example_files["mirror_nodes"]
+    tsv = tmp_path / "nodes.tsv"
+    # Simple conversion: id<tab>seq
+    content = nodes_fa.read_text().splitlines()
+    with tsv.open("w") as out:
+        for i in range(0, len(content), 2):
+            if content[i].startswith(">"):
+                out.write(f"{content[i][1:]}\t{content[i+1]}\n")
 
     r = runner.invoke(
         cli,

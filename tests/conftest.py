@@ -344,6 +344,39 @@ def ensure_abs_gfa_path(tmp_path_factory):
     return mirror
 
 
+@pytest.fixture(scope="session")
+def prepare_mini_example_files(tmp_path_factory):
+    """Prepare mini-example.gfa and nodes.fa under a mirror tree and expose absolute targets.
+
+    Returns a dict with:
+      - abs_gfa: Path('/mnt/d/lab/hap/data/mini-example/mini-example.gfa')
+      - abs_nodes: Path('/mnt/d/lab/hap/data/mini-example/nodes.fa')
+      - mirror_gfa: Path to the actual mirror file under /workspace/.abs-mnt/...
+      - mirror_nodes: same as above for nodes.fa
+    """
+    abs_root = Path("/mnt/d/lab/hap/data/mini-example")
+    abs_gfa = abs_root / "mini-example.gfa"
+    abs_nodes = abs_root / "nodes.fa"
+
+    # Mirror path
+    mirror_gfa = Path("/workspace/.abs-mnt") / abs_gfa.relative_to("/")
+    mirror_nodes = Path("/workspace/.abs-mnt") / abs_nodes.relative_to("/")
+    mirror_gfa.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write minimal GFA and nodes FASTA
+    if not mirror_gfa.exists():
+        mirror_gfa.write_text("""H\tVN:Z:1.0\nS\tsegA\t*\tLN:i:4\nS\tsegB\t*\tLN:i:4\nL\tsegA\t+\tsegB\t+\t0M\n""")
+    if not mirror_nodes.exists():
+        mirror_nodes.write_text(">segA\nACGT\n>segB\nACGT\n")
+
+    return {
+        "abs_gfa": abs_gfa,
+        "abs_nodes": abs_nodes,
+        "mirror_gfa": mirror_gfa,
+        "mirror_nodes": mirror_nodes,
+    }
+
+
 @pytest.fixture(autouse=True)
 def align_db_sql_path(monkeypatch):
     """Make create_tables_if_not_exist open bare file name to satisfy existing tests."""
