@@ -10,12 +10,8 @@ from hap.lib.util_obj import ValidationResult
 
 
 @pytest.fixture()
-def gfa_abs_path(prepare_mini_example_files, monkeypatch):
-    data = prepare_mini_example_files
-    # Map absolute path to mirror path: ensure click exists=True check passes by creating a symlink like before
-    # If kernel follows symlink automatically, we can just return the mirror; but the CLI expects absolute path string.
-    # We return the mirror path (which is a real file) but its string remains absolute under /workspace/.abs-mnt/...
-    return data["mirror_gfa"]
+def gfa_rel_path(prepare_rel_mini_example_files):
+    return prepare_rel_mini_example_files["gfa"]
 
 
 def _monkey_build_pipeline(monkeypatch, gfa_path, seq_file=None):
@@ -103,15 +99,15 @@ def _monkey_build_pipeline(monkeypatch, gfa_path, seq_file=None):
     return captured
 
 
-def test_build_run_no_sequence_file(monkeypatch, runner, gfa_abs_path):
-    captured = _monkey_build_pipeline(monkeypatch, gfa_abs_path)
+def test_build_run_no_sequence_file(monkeypatch, runner, gfa_rel_path):
+    captured = _monkey_build_pipeline(monkeypatch, gfa_rel_path)
 
     r = runner.invoke(
         cli,
         [
             "build",
             "run",
-            str(gfa_abs_path),
+            str(gfa_rel_path),
             "-n",
             "hap1",
             "-a",
@@ -128,18 +124,18 @@ def test_build_run_no_sequence_file(monkeypatch, runner, gfa_abs_path):
     assert isinstance(captured["subgraphs"], list)
 
 
-def test_build_run_with_fasta_sequence_file(monkeypatch, runner, tmp_path, gfa_abs_path, prepare_mini_example_files):
-    captured = _monkey_build_pipeline(monkeypatch, gfa_abs_path)
+def test_build_run_with_fasta_sequence_file(monkeypatch, runner, tmp_path, gfa_rel_path, prepare_rel_mini_example_files):
+    captured = _monkey_build_pipeline(monkeypatch, gfa_rel_path)
 
-    # Use the prepared nodes.fa (mirror path) as external sequence file
-    nodes_fa = prepare_mini_example_files["mirror_nodes"]
+    # Use the prepared nodes.fa (relative path) as external sequence file
+    nodes_fa = prepare_rel_mini_example_files["nodes"]
 
     r = runner.invoke(
         cli,
         [
             "build",
             "run",
-            str(gfa_abs_path),
+            str(gfa_rel_path),
             "-n",
             "hap2",
             "-a",
@@ -156,11 +152,11 @@ def test_build_run_with_fasta_sequence_file(monkeypatch, runner, tmp_path, gfa_a
     assert captured["hap_info"]["name"] == "hap2"
 
 
-def test_build_run_with_tsv_sequence_file(monkeypatch, runner, tmp_path, gfa_abs_path, prepare_mini_example_files):
-    captured = _monkey_build_pipeline(monkeypatch, gfa_abs_path)
+def test_build_run_with_tsv_sequence_file(monkeypatch, runner, tmp_path, gfa_rel_path, prepare_rel_mini_example_files):
+    captured = _monkey_build_pipeline(monkeypatch, gfa_rel_path)
 
     # Convert nodes.fa to TSV in a tmp
-    nodes_fa = prepare_mini_example_files["mirror_nodes"]
+    nodes_fa = prepare_rel_mini_example_files["nodes"]
     tsv = tmp_path / "nodes.tsv"
     # Simple conversion: id<tab>seq
     content = nodes_fa.read_text().splitlines()
@@ -174,7 +170,7 @@ def test_build_run_with_tsv_sequence_file(monkeypatch, runner, tmp_path, gfa_abs
         [
             "build",
             "run",
-            str(gfa_abs_path),
+            str(gfa_rel_path),
             "-n",
             "hap3",
             "-a",
@@ -191,15 +187,15 @@ def test_build_run_with_tsv_sequence_file(monkeypatch, runner, tmp_path, gfa_abs
     assert captured["hap_info"]["name"] == "hap3"
 
 
-def test_build_run_sequence_file_is_dir_error(monkeypatch, runner, tmp_path, gfa_abs_path):
-    _ = _monkey_build_pipeline(monkeypatch, gfa_abs_path)
+def test_build_run_sequence_file_is_dir_error(monkeypatch, runner, tmp_path, gfa_rel_path):
+    _ = _monkey_build_pipeline(monkeypatch, gfa_rel_path)
 
     r = runner.invoke(
         cli,
         [
             "build",
             "run",
-            str(gfa_abs_path),
+            str(gfa_rel_path),
             "-n",
             "hap4",
             "-a",
@@ -216,16 +212,16 @@ def test_build_run_sequence_file_is_dir_error(monkeypatch, runner, tmp_path, gfa
     assert "--sequence-file must be a single file" in r.output
 
 
-def test_build_validate_arg_path(monkeypatch, runner, tmp_path, gfa_abs_path):
+def test_build_validate_arg_path(monkeypatch, runner, tmp_path, gfa_rel_path):
     # multi files without -s should error
     g2 = tmp_path / "b.gfa"
-    g2.write_text(gfa_abs_path.read_text())
+    g2.write_text(gfa_rel_path.read_text())
     r = runner.invoke(
         cli,
         [
             "build",
             "run",
-            str(gfa_abs_path),
+            str(gfa_rel_path),
             str(g2),
             "-n",
             "hap5",
@@ -244,7 +240,7 @@ def test_build_validate_arg_path(monkeypatch, runner, tmp_path, gfa_abs_path):
     d = tmp_path / "subs"
     d.mkdir()
     f = d / "x.gfa"
-    f.write_text(gfa_abs_path.read_text())
+    f.write_text(gfa_rel_path.read_text())
 
     # monkeypatch GFA.divide to return empty (so run falls back to [('', gfa)])
     gfa = importlib.import_module("hap.lib.gfa")

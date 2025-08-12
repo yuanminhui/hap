@@ -377,6 +377,25 @@ def prepare_mini_example_files(tmp_path_factory):
     }
 
 
+@pytest.fixture(scope="session")
+def prepare_rel_mini_example_files():
+    """Prepare mini-example test files under relative path data/mini-example.
+
+    Returns dict with keys:
+      - gfa: Path('data/mini-example/mini-example.gfa')
+      - nodes: Path('data/mini-example/nodes.fa')
+    """
+    root = Path("data/mini-example")
+    root.mkdir(parents=True, exist_ok=True)
+    gfa = root / "mini-example.gfa"
+    nodes = root / "nodes.fa"
+    if not gfa.exists():
+        gfa.write_text("""H\tVN:Z:1.0\nS\tsegA\t*\tLN:i:4\nS\tsegB\t*\tLN:i:4\nL\tsegA\t+\tsegB\t+\t0M\n""")
+    if not nodes.exists():
+        nodes.write_text(">segA\nACGT\n>segB\nACGT\n")
+    return {"gfa": gfa, "nodes": nodes}
+
+
 @pytest.fixture(autouse=True)
 def align_db_sql_path(monkeypatch):
     """Make create_tables_if_not_exist open bare file name to satisfy existing tests."""
