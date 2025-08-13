@@ -229,6 +229,18 @@ def test_get_connection_info_no_info(mock_config_empty, mocker):
 ### Test for function `connect` ###
 
 
+# Reintroduce mock_connection_info fixture for connect tests
+@pytest.fixture
+def mock_connection_info():
+    return {
+        "host": "localhost",
+        "port": 5432,
+        "user": "test_user",
+        "password": "test_password",
+        "dbname": "test_db",
+    }
+
+
 def test_connect_success(mock_connection_info, mocker):
     """Test successful database connection returns a connection object."""
     mock_connect = mocker.patch("psycopg2.connect")
