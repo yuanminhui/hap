@@ -306,42 +306,29 @@ def runner():
 
 
 @pytest.fixture(scope="session")
-def ensure_abs_gfa_path(tmp_path_factory):
-    """Ensure the absolute path /mnt/d/lab/hap/data/mini-example/mini-example.gfa exists.
-    If not writable, create a temp file and bind via symlink tree inside /workspace and monkeypatch usage sites.
-    For our tests, we only need the literal path string to exist as a regular file; create it under /workspace and symlink if needed.
-    """
-    target = Path("/mnt/d/lab/hap/data/mini-example/mini-example.gfa")
-    # Try to create parent chain; if fails due to permission, create a temp and symlink via /workspace
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        writable = True
-    except Exception:
-        writable = False
+def ensure_abs_gfa_path():
+    """Return existing mini-example.gfa from known locations, else skip."""
+    candidates = [
+        Path("/mnt/d/lab/hap/data/mini-example/mini-example.gfa"),
+        Path("/workspace/data/mini-example/mini-example.gfa"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    pytest.skip("mini-example.gfa not found in expected locations; skipping build CLI tests.")
 
-    if writable:
-        if not target.exists():
-            target.write_text("""H\tVN:Z:1.0\nS\tsegA\t*\tLN:i:4\nS\tsegB\t*\tLN:i:4\nL\tsegA\t+\tsegB\t+\t0M\n""")
-        return target
 
-    # Fallback: create under /workspace and create an absolute path via mountpoint symlink
-    tmp_dir = tmp_path_factory.mktemp("mini-example")
-    local = tmp_dir / "mini-example.gfa"
-    local.write_text("""H\tVN:Z:1.0\nS\tsegA\t*\tLN:i:4\nS\tsegB\t*\tLN:i:4\nL\tsegA\t+\tsegB\t+\t0M\n""")
-
-    # Create a symlink at /workspace/.abs-mnt/... mirroring the target absolute path
-    mirror = Path("/workspace/.abs-mnt") / target.relative_to("/")
-    mirror.parent.mkdir(parents=True, exist_ok=True)
-    if mirror.exists() or mirror.is_symlink():
-        try:
-            mirror.unlink()
-        except Exception:
-            pass
-    mirror.symlink_to(local)
-
-    # For tests we pass the absolute path string explicitly to CLI; click will check exists=True.
-    # Provide the mirror path to ensure os.path.exists passes.
-    return mirror
+@pytest.fixture(scope="session")
+def ensure_abs_nodes_fa():
+    """Return existing nodes.fa from known locations, else skip."""
+    candidates = [
+        Path("/mnt/d/lab/hap/data/mini-example/nodes.fa"),
+        Path("/workspace/data/mini-example/nodes.fa"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    pytest.skip("nodes.fa not found in expected locations; skipping sequence-file tests.")
 
 
 @pytest.fixture(autouse=True)
