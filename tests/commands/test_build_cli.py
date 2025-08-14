@@ -10,8 +10,8 @@ from hap.lib.util_obj import ValidationResult
 
 
 @pytest.fixture()
-def gfa_rel_path(prepare_rel_mini_example_files):
-    return prepare_rel_mini_example_files["gfa"]
+def gfa_rel_path(existing_mini_example_files):
+    return existing_mini_example_files["gfa"]
 
 
 def _monkey_build_pipeline(monkeypatch, gfa_path, seq_file=None):
@@ -124,11 +124,11 @@ def test_build_run_no_sequence_file(monkeypatch, runner, gfa_rel_path):
     assert isinstance(captured["subgraphs"], list)
 
 
-def test_build_run_with_fasta_sequence_file(monkeypatch, runner, tmp_path, gfa_rel_path, prepare_rel_mini_example_files):
+def test_build_run_with_fasta_sequence_file(monkeypatch, runner, tmp_path, gfa_rel_path, existing_mini_example_files):
     captured = _monkey_build_pipeline(monkeypatch, gfa_rel_path)
 
-    # Use the prepared nodes.fa (relative path) as external sequence file
-    nodes_fa = prepare_rel_mini_example_files["nodes"]
+    # Use the repository nodes.fa (relative path) as external sequence file
+    nodes_fa = existing_mini_example_files["nodes"]
 
     r = runner.invoke(
         cli,
@@ -152,11 +152,11 @@ def test_build_run_with_fasta_sequence_file(monkeypatch, runner, tmp_path, gfa_r
     assert captured["hap_info"]["name"] == "hap2"
 
 
-def test_build_run_with_tsv_sequence_file(monkeypatch, runner, tmp_path, gfa_rel_path, prepare_rel_mini_example_files):
+def test_build_run_with_tsv_sequence_file(monkeypatch, runner, tmp_path, gfa_rel_path, existing_mini_example_files):
     captured = _monkey_build_pipeline(monkeypatch, gfa_rel_path)
 
     # Convert nodes.fa to TSV in a tmp
-    nodes_fa = prepare_rel_mini_example_files["nodes"]
+    nodes_fa = existing_mini_example_files["nodes"]
     tsv = tmp_path / "nodes.tsv"
     # Simple conversion: id<tab>seq
     content = nodes_fa.read_text().splitlines()

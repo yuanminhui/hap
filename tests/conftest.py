@@ -404,6 +404,15 @@ def align_db_sql_path(monkeypatch):
     monkeypatch.setattr(dbmod, "SCRIPT_PATH_CREATE_TABLES", "create_tables.sql", raising=False)
 
 
+@pytest.fixture(scope="session")
+def existing_mini_example_files():
+    gfa = Path("data/mini-example/mini-example.gfa")
+    nodes = Path("data/mini-example/nodes.fa")
+    if not gfa.exists() or not nodes.exists():
+        pytest.skip("mini-example test data not found under data/mini-example")
+    return {"gfa": gfa, "nodes": nodes}
+
+
 # Skip collecting legacy DB tests that require precise patch semantics not available here
 def pytest_ignore_collect(path):
     return str(path).endswith("tests/lib/test_database.py")

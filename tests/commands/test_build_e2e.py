@@ -10,8 +10,8 @@ from hap.lib.util_obj import ValidationResult
 
 
 @pytest.fixture(scope="session")
-def gfa_rel(prepare_rel_mini_example_files) -> Path:
-    return prepare_rel_mini_example_files["gfa"]
+def gfa_rel(existing_mini_example_files) -> Path:
+    return existing_mini_example_files["gfa"]
 
 
 def _fake_conn_ctx():
@@ -45,7 +45,7 @@ def _fake_conn_ctx():
 
 
 @pytest.mark.parametrize("with_nodes", [False, True])
-def test_build_e2e_minimal(monkeypatch, gfa_rel: Path, with_nodes: bool, prepare_rel_mini_example_files):
+def test_build_e2e_minimal(monkeypatch, gfa_rel: Path, with_nodes: bool, existing_mini_example_files):
     # Import live modules
     build = importlib.import_module("hap.commands.build")
     gfa = importlib.import_module("hap.lib.gfa")
@@ -104,7 +104,7 @@ def test_build_e2e_minimal(monkeypatch, gfa_rel: Path, with_nodes: bool, prepare
         "desc",
     ]
     if with_nodes:
-        nodes_fa = prepare_rel_mini_example_files["nodes"]
+        nodes_fa = existing_mini_example_files["nodes"]
         args.extend(["--sequence-file", str(nodes_fa)])
 
     r = CliRunner().invoke(cli, args)
