@@ -6,9 +6,13 @@ from pathlib import Path
 import pytest
 
 # Ensure package import without installation
-SRC_PATH = "/workspace/src"
-if SRC_PATH not in sys.path:
-    sys.path.insert(0, SRC_PATH)
+# Prefer dynamic repo root detection; fallback to /workspace/src if present
+_repo_root = Path(__file__).resolve().parents[1]
+_src_path = str(_repo_root / "src")
+if _src_path not in sys.path:
+    sys.path.insert(0, _src_path)
+if Path("/workspace/src").exists() and "/workspace/src" not in sys.path:
+    sys.path.insert(0, "/workspace/src")
 
 # Provide lightweight stubs for heavy/optional third-party modules
 # Stub igraph
@@ -76,32 +80,35 @@ if "pandas" not in sys.modules:
     sys.modules["pandas"] = pandas_stub
 
 # Stub psycopg2 (tests do not connect to real DB)
-if "psycopg2" not in sys.modules:
-    psycopg2_stub = types.ModuleType("psycopg2")
+try:
+    import psycopg2  # type: ignore
+except Exception:
+    if "psycopg2" not in sys.modules:
+        psycopg2_stub = types.ModuleType("psycopg2")
 
-    class OperationalError(Exception):
-        pass
-
-    class Error(Exception):
-        pass
-
-    class _ext:  # extensions namespace placeholder
-        class connection:  # for type hints
+        class OperationalError(Exception):
             pass
 
-    def _connect(**kwargs):
-        raise OperationalError("No real DB in tests")
+        class Error(Exception):
+            pass
 
-    psycopg2_stub.OperationalError = OperationalError
-    psycopg2_stub.Error = Error
-    psycopg2_stub.connect = _connect
-    # minimal extensions submodule
-    extensions_mod = types.ModuleType("psycopg2.extensions")
-    extensions_mod.connection = _ext.connection
-    sys.modules["psycopg2"] = psycopg2_stub
-    sys.modules["psycopg2.extensions"] = extensions_mod
-    # attach attribute so `psycopg2.extensions` resolves
-    psycopg2_stub.extensions = extensions_mod
+        class _ext:  # extensions namespace placeholder
+            class connection:  # for type hints
+                pass
+
+        def _connect(**kwargs):
+            raise OperationalError("No real DB in tests")
+
+        psycopg2_stub.OperationalError = OperationalError
+        psycopg2_stub.Error = Error
+        psycopg2_stub.connect = _connect
+        # minimal extensions submodule
+        extensions_mod = types.ModuleType("psycopg2.extensions")
+        extensions_mod.connection = _ext.connection
+        sys.modules["psycopg2"] = psycopg2_stub
+        sys.modules["psycopg2.extensions"] = extensions_mod
+        # attach attribute so `psycopg2.extensions` resolves
+        psycopg2_stub.extensions = extensions_mod
 
 # Provide a Bio.SeqIO stub so hap.lib.sequence can import even if Biopython is absent
 if "Bio" not in sys.modules:
