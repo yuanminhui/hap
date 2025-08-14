@@ -12,7 +12,8 @@ def runner() -> CliRunner:
     return CliRunner()
 
 
-def test_main_succeeds(runner: CliRunner) -> None:
-    """It exits with a status code of zero."""
-    result = runner.invoke(__main__.cli)
+def test_main_help_succeeds(runner: CliRunner) -> None:
+    """It exits with a status code of zero when showing help."""
+    result = runner.invoke(__main__.cli, ["--help"])
     assert result.exit_code == 0
+    assert "Usage" in result.output or "hap" in result.output

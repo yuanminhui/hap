@@ -6,9 +6,13 @@ from pathlib import Path
 import pytest
 
 # Ensure package import without installation
-SRC_PATH = "/workspace/src"
-if SRC_PATH not in sys.path:
-    sys.path.insert(0, SRC_PATH)
+# Prefer dynamic repo root detection; fallback to /workspace/src if present
+_repo_root = Path(__file__).resolve().parents[1]
+_src_path = str(_repo_root / "src")
+if _src_path not in sys.path:
+    sys.path.insert(0, _src_path)
+if Path("/workspace/src").exists() and "/workspace/src" not in sys.path:
+    sys.path.insert(0, "/workspace/src")
 
 # Provide lightweight stubs for heavy/optional third-party modules
 # Stub igraph
@@ -76,32 +80,35 @@ if "pandas" not in sys.modules:
     sys.modules["pandas"] = pandas_stub
 
 # Stub psycopg2 (tests do not connect to real DB)
-if "psycopg2" not in sys.modules:
-    psycopg2_stub = types.ModuleType("psycopg2")
+try:
+    import psycopg2  # type: ignore
+except Exception:
+    if "psycopg2" not in sys.modules:
+        psycopg2_stub = types.ModuleType("psycopg2")
 
-    class OperationalError(Exception):
-        pass
-
-    class Error(Exception):
-        pass
-
-    class _ext:  # extensions namespace placeholder
-        class connection:  # for type hints
+        class OperationalError(Exception):
             pass
 
-    def _connect(**kwargs):
-        raise OperationalError("No real DB in tests")
+        class Error(Exception):
+            pass
 
-    psycopg2_stub.OperationalError = OperationalError
-    psycopg2_stub.Error = Error
-    psycopg2_stub.connect = _connect
-    # minimal extensions submodule
-    extensions_mod = types.ModuleType("psycopg2.extensions")
-    extensions_mod.connection = _ext.connection
-    sys.modules["psycopg2"] = psycopg2_stub
-    sys.modules["psycopg2.extensions"] = extensions_mod
-    # attach attribute so `psycopg2.extensions` resolves
-    psycopg2_stub.extensions = extensions_mod
+        class _ext:  # extensions namespace placeholder
+            class connection:  # for type hints
+                pass
+
+        def _connect(**kwargs):
+            raise OperationalError("No real DB in tests")
+
+        psycopg2_stub.OperationalError = OperationalError
+        psycopg2_stub.Error = Error
+        psycopg2_stub.connect = _connect
+        # minimal extensions submodule
+        extensions_mod = types.ModuleType("psycopg2.extensions")
+        extensions_mod.connection = _ext.connection
+        sys.modules["psycopg2"] = psycopg2_stub
+        sys.modules["psycopg2.extensions"] = extensions_mod
+        # attach attribute so `psycopg2.extensions` resolves
+        psycopg2_stub.extensions = extensions_mod
 
 # Provide a Bio.SeqIO stub so hap.lib.sequence can import even if Biopython is absent
 if "Bio" not in sys.modules:
@@ -331,12 +338,73 @@ def ensure_abs_nodes_fa():
     pytest.skip("nodes.fa not found in expected locations; skipping sequence-file tests.")
 
 
+@pytest.fixture(scope="session")
+def prepare_mini_example_files(tmp_path_factory):
+    """Prepare mini-example.gfa and nodes.fa under a mirror tree and expose absolute targets.
+
+    Returns a dict with:
+      - abs_gfa: Path('/mnt/d/lab/hap/data/mini-example/mini-example.gfa')
+      - abs_nodes: Path('/mnt/d/lab/hap/data/mini-example/nodes.fa')
+      - mirror_gfa: Path to the actual mirror file under /workspace/.abs-mnt/...
+      - mirror_nodes: same as above for nodes.fa
+    """
+    abs_root = Path("/mnt/d/lab/hap/data/mini-example")
+    abs_gfa = abs_root / "mini-example.gfa"
+    abs_nodes = abs_root / "nodes.fa"
+
+    # Mirror path
+    mirror_gfa = Path("/workspace/.abs-mnt") / abs_gfa.relative_to("/")
+    mirror_nodes = Path("/workspace/.abs-mnt") / abs_nodes.relative_to("/")
+    mirror_gfa.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write minimal GFA and nodes FASTA
+    if not mirror_gfa.exists():
+        mirror_gfa.write_text("""H\tVN:Z:1.0\nS\tsegA\t*\tLN:i:4\nS\tsegB\t*\tLN:i:4\nL\tsegA\t+\tsegB\t+\t0M\n""")
+    if not mirror_nodes.exists():
+        mirror_nodes.write_text(">segA\nACGT\n>segB\nACGT\n")
+
+    return {
+        "abs_gfa": abs_gfa,
+        "abs_nodes": abs_nodes,
+        "mirror_gfa": mirror_gfa,
+        "mirror_nodes": mirror_nodes,
+    }
+
+
+@pytest.fixture(scope="session")
+def prepare_rel_mini_example_files():
+    """Prepare mini-example test files under relative path data/mini-example.
+
+    Returns dict with keys:
+      - gfa: Path('data/mini-example/mini-example.gfa')
+      - nodes: Path('data/mini-example/nodes.fa')
+    """
+    root = Path("data/mini-example")
+    root.mkdir(parents=True, exist_ok=True)
+    gfa = root / "mini-example.gfa"
+    nodes = root / "nodes.fa"
+    if not gfa.exists():
+        gfa.write_text("""H\tVN:Z:1.0\nS\tsegA\t*\tLN:i:4\nS\tsegB\t*\tLN:i:4\nL\tsegA\t+\tsegB\t+\t0M\n""")
+    if not nodes.exists():
+        nodes.write_text(">segA\nACGT\n>segB\nACGT\n")
+    return {"gfa": gfa, "nodes": nodes}
+
+
 @pytest.fixture(autouse=True)
 def align_db_sql_path(monkeypatch):
     """Make create_tables_if_not_exist open bare file name to satisfy existing tests."""
     import hap.lib.database as dbmod
 
     monkeypatch.setattr(dbmod, "SCRIPT_PATH_CREATE_TABLES", "create_tables.sql", raising=False)
+
+
+@pytest.fixture(scope="session")
+def existing_mini_example_files():
+    gfa = Path("data/mini-example/mini-example.gfa")
+    nodes = Path("data/mini-example/nodes.fa")
+    if not gfa.exists() or not nodes.exists():
+        pytest.skip("mini-example test data not found under data/mini-example")
+    return {"gfa": gfa, "nodes": nodes}
 
 
 # Skip collecting legacy DB tests that require precise patch semantics not available here
