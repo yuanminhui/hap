@@ -1,0 +1,4 @@
+# file: /workspace/src/hap/lib/fileutil.py
+# hypothesis_version: 6.138.2
+
+['.gz', 'rt', 'w', 'wt']

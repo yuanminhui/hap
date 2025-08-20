@@ -72,7 +72,7 @@ def write_tsv_to_fasta(tsv_path: Path, out_fh: TextIO) -> int:
     n = 0
     with tsv_path.open() as h:
         for line in h:
-            parts = line.rstrip().split("\t")
+            parts = line.rstrip("\n").split("\t")
             if len(parts) != 2:
                 continue
             out_fh.write(f">{parts[0]}\n{parts[1]}\n")

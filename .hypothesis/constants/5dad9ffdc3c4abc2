@@ -1,0 +1,4 @@
+# file: /workspace/src/hap/lib/config.py
+# hypothesis_version: 6.138.2
+
+['.', 'json', 'r', 'w', 'yaml']
