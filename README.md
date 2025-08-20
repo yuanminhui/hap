@@ -15,6 +15,29 @@
 A toolkit for data convertion and manipulation based on the Hierarchical Pangenome (HAP) model.
 
 ## Features
+## Testing & Quality
+
+- Run all tests:
+
+```bash
+PYTHONPATH=src pytest -n auto --maxfail=1 --cov=hap --cov-report=term-missing:skip-covered
+```
+
+- Large-data tests (≥100MB):
+
+```bash
+PYTHONPATH=src pytest -m large -n 1 --timeout=0
+```
+
+- Nox sessions:
+
+```bash
+nox -s tests
+nox -s bench
+```
+
+- Perf reports and coverage are stored under `reports/` and `htmlcov/` respectively when configured.
+
 
 - Build a Hierarchical Pangenome from GFA(s)
 
