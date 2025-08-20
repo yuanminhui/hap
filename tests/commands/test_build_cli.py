@@ -10,8 +10,8 @@ from hap.lib.util_obj import ValidationResult
 
 
 @pytest.fixture()
-def gfa_rel_path(existing_mini_example_files):
-    return existing_mini_example_files["gfa"]
+def gfa_rel_path():
+    return Path("data/mini-example/mini-example.gfa")
 
 
 def _monkey_build_pipeline(monkeypatch, gfa_path, seq_file=None):
@@ -107,7 +107,7 @@ def test_build_run_no_sequence_file(monkeypatch, runner, gfa_rel_path):
         [
             "build",
             "run",
-            str(gfa_rel_path),
+            str(gfa_rel_path.resolve()),
             "-n",
             "hap1",
             "-a",
@@ -128,14 +128,14 @@ def test_build_run_with_fasta_sequence_file(monkeypatch, runner, tmp_path, gfa_r
     captured = _monkey_build_pipeline(monkeypatch, gfa_rel_path)
 
     # Use the repository nodes.fa (relative path) as external sequence file
-    nodes_fa = existing_mini_example_files["nodes"]
+    nodes_fa = Path("data/mini-example/nodes.fa")
 
     r = runner.invoke(
         cli,
         [
             "build",
             "run",
-            str(gfa_rel_path),
+            str(gfa_rel_path.resolve()),
             "-n",
             "hap2",
             "-a",
@@ -156,7 +156,7 @@ def test_build_run_with_tsv_sequence_file(monkeypatch, runner, tmp_path, gfa_rel
     captured = _monkey_build_pipeline(monkeypatch, gfa_rel_path)
 
     # Convert nodes.fa to TSV in a tmp
-    nodes_fa = existing_mini_example_files["nodes"]
+    nodes_fa = Path("data/mini-example/nodes.fa")
     tsv = tmp_path / "nodes.tsv"
     # Simple conversion: id<tab>seq
     content = nodes_fa.read_text().splitlines()
@@ -170,7 +170,7 @@ def test_build_run_with_tsv_sequence_file(monkeypatch, runner, tmp_path, gfa_rel
         [
             "build",
             "run",
-            str(gfa_rel_path),
+            str(gfa_rel_path.resolve()),
             "-n",
             "hap3",
             "-a",
@@ -195,7 +195,7 @@ def test_build_run_sequence_file_is_dir_error(monkeypatch, runner, tmp_path, gfa
         [
             "build",
             "run",
-            str(gfa_rel_path),
+            str(gfa_rel_path.resolve()),
             "-n",
             "hap4",
             "-a",
@@ -221,7 +221,7 @@ def test_build_validate_arg_path(monkeypatch, runner, tmp_path, gfa_rel_path):
         [
             "build",
             "run",
-            str(gfa_rel_path),
+            str(gfa_rel_path.resolve()),
             str(g2),
             "-n",
             "hap5",

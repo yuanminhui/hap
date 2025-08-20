@@ -1,0 +1,4 @@
+H	VN:Z:1.0
+S	segA	*	LN:i:4
+S	segB	*	LN:i:4
+L	segA	+	segB	+	0M

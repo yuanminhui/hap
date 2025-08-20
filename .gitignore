@@ -4,3 +4,11 @@ htmlcov/
 tests/data/large/
 tests/.data/
 *.big
+/.mypy_cache/
+/.nox/
+/dist/
+/docs/_build/
+/src/*.egg-info/
+__pycache__/
+# Allow mini-example test data in repo
+!data/mini-example/

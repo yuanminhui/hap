@@ -409,14 +409,18 @@ def align_db_sql_path(monkeypatch):
     import hap.lib.database as dbmod
 
     monkeypatch.setattr(dbmod, "SCRIPT_PATH_CREATE_TABLES", "create_tables.sql", raising=False)
+    # Ensure config file exists to avoid FileNotFoundError in get_connection_info
+    import hap
+    cfg_path = Path(hap.CONFIG_PATH)
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    if not cfg_path.exists():
+        cfg_path.write_text("db:\n  host: localhost\n  port: 5432\n  user: u\n  password: p\n  dbname: d\n")
 
 
 @pytest.fixture(scope="session")
 def existing_mini_example_files():
     gfa = Path("data/mini-example/mini-example.gfa")
     nodes = Path("data/mini-example/nodes.fa")
-    if not gfa.exists() or not nodes.exists():
-        pytest.skip("mini-example test data not found under data/mini-example")
     return {"gfa": gfa, "nodes": nodes}
 
 
