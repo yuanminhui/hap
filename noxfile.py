@@ -30,6 +30,7 @@ nox.options.sessions = (
     "tests",
     "lint",
     "typecheck",
+    "bench",
 )
 
 
@@ -193,6 +194,17 @@ def typecheck(session: Session) -> None:
     """Run mypy on src/ and basic stubs."""
     session.install("mypy", ".")
     session.run("mypy", "src/")
+
+
+@session(python=python_versions[0])
+def bench(session: Session) -> None:
+    """Run performance tests and generate REPORT.md."""
+    session.install(".")
+    session.install("pytest", "psutil")
+    # Run only perf tests
+    session.run("pytest", "-k", "perf", "-q")
+    # Build report from CSVs
+    session.run("python", "scripts/build_report.py")
 
 
 @session(python=python_versions[0])
