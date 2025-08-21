@@ -132,6 +132,34 @@ def generate_gfa_missing_fields(path: Path) -> None:
         fh.write("S\tsegA\n")  # missing length/sequence fields
 
 
+def generate_gfa_dangling_edge(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as fh:
+        fh.write("H\tVN:Z:1.0\n")
+        fh.write("S\ts0\t*\tLN:i:1\n")
+        # edge to non-existing node s99
+        fh.write("L\ts0\t+\ts99\t+\t0M\n")
+
+
+def generate_gfa_repeated_edge(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as fh:
+        fh.write("H\tVN:Z:1.0\n")
+        fh.write("S\ts0\t*\tLN:i:1\n")
+        fh.write("S\ts1\t*\tLN:i:1\n")
+        fh.write("L\ts0\t+\ts1\t+\t0M\n")
+        fh.write("L\ts0\t+\ts1\t+\t0M\n")  # repeated
+
+
+def generate_gfa_invalid_path_record(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as fh:
+        fh.write("H\tVN:Z:1.0\n")
+        fh.write("S\ts0\t*\tLN:i:1\n")
+        # Invalid P record (wrong columns)
+        fh.write("P\tpath\t*\n")
+
+
 def random_seq(length: int, alphabet: str = ALLOWED) -> str:
     return "".join(random.choice(alphabet) for _ in range(length))
 
