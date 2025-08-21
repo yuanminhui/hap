@@ -28,6 +28,8 @@ python_versions = ["3.10", "3.9"]
 nox.needs_version = ">= 2021.6.6"
 nox.options.sessions = (
     "tests",
+    "lint",
+    "typecheck",
 )
 
 
@@ -176,6 +178,21 @@ def tests(session: Session) -> None:
         "--cov-report=term-missing:skip-covered",
         *session.posargs,
     )
+
+
+@session(python=python_versions[0])
+def lint(session: Session) -> None:
+    """Run ruff checks and formatting check."""
+    session.install("ruff")
+    session.run("ruff", "check", ".")
+    session.run("ruff", "format", "--check", ".")
+
+
+@session(python=python_versions[0])
+def typecheck(session: Session) -> None:
+    """Run mypy on src/ and basic stubs."""
+    session.install("mypy", ".")
+    session.run("mypy", "src/")
 
 
 @session(python=python_versions[0])
