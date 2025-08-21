@@ -81,6 +81,8 @@ def test_build_large_perf(tmp_path, monkeypatch):
         return sub_haps
     monkeypatch.setattr(build, "build_subgraphs_with_sequence_in_parallel", _builder)
     monkeypatch.setattr(build, "check_name", lambda name: True)
+    # Avoid heavy hap2db path in perf smoke test
+    monkeypatch.setattr(build, "hap2db", lambda hap_info, subgraphs, conn: None)
     r = CliRunner().invoke(cli, ["build", "run", str(Path(g).resolve()), "-n", "big", "-a", "c", "-c", "u", "-x", ""]) 
     assert r.exit_code == 0
 
