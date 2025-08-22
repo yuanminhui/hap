@@ -1,6 +1,6 @@
-from pathlib import Path
-import io
 import types
+from pathlib import Path
+
 import pytest
 
 from hap.lib import sequence as seqmod

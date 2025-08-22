@@ -1,8 +1,7 @@
-import os
 import sys
 import types
-import contextlib
 from pathlib import Path
+
 import pytest
 
 # Ensure package import without installation
@@ -81,7 +80,7 @@ if "pandas" not in sys.modules:
 
 # Stub psycopg2 (tests do not connect to real DB)
 try:
-    import psycopg2  # type: ignore
+    pass  # type: ignore
 except Exception:
     if "psycopg2" not in sys.modules:
         psycopg2_stub = types.ModuleType("psycopg2")
@@ -178,7 +177,7 @@ class FakeCursor:
             self._fetch_buffer = [(self.db.id_to_length.get(seg_id),)]
         # SELECT for get with regex
         elif "WHERE S.SEMANTIC_ID ~" in sql_up:
-            pattern = params[0]
+            params[0]
             rows = [(sid, seq) for sid, seq in self.db.sequences.items() if sid is not None]
             self._fetch_buffer = rows
         # SELECT join for get by ids

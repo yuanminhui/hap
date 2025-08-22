@@ -1,4 +1,3 @@
-from pathlib import Path
 
 
 def test_generate_report_md(tmp_path):

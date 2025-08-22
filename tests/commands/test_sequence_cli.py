@@ -1,11 +1,9 @@
-import io
-import re
-import pytest
-from click.testing import CliRunner
 import importlib
 
+import pytest
+from click.testing import CliRunner
+
 from hap.__main__ import cli
-from hap.lib import sequence as seqmod
 
 
 @pytest.fixture()

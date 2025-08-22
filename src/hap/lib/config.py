@@ -5,9 +5,10 @@ Classes:
     Config: A class to manipulate the configuration data object.
 """
 
-from typing import Any
-import yaml
 import json
+from typing import Any
+
+import yaml
 
 from hap.lib.error import UnsupportedError
 

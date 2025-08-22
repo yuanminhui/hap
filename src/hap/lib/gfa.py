@@ -5,10 +5,10 @@ Classes:
     GFA: A class for GFA file.
 """
 
+import multiprocessing as mp
 import os
 import shutil
 import subprocess
-import multiprocessing as mp
 
 import click
 import igraph as ig

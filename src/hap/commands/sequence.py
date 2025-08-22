@@ -1,15 +1,14 @@
-import click
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Dict, List, Optional
+
+import click
+
+import hap
+from hap.lib import database as db
 from hap.lib.sequence import (
     read_sequences_from_fasta,
     sanitize_sequence,
-    write_fasta_or_fastq_to_tsv,
-    write_tsv_to_fasta,
 )
-from hap.lib import database as db
-import hap
-import psycopg2
 
 
 @click.group(

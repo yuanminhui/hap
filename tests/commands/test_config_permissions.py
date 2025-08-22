@@ -1,10 +1,9 @@
-import os
 import stat
-from pathlib import Path
+
 from click.testing import CliRunner
 
-from hap.__main__ import cli
 import hap
+from hap.__main__ import cli
 
 
 def test_config_set_readonly_file(tmp_path, monkeypatch):

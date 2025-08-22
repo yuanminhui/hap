@@ -1,8 +1,9 @@
-import io
 from pathlib import Path
-from hypothesis import given, strategies as st
-from hap.lib import sequence as seqmod
 
+from hypothesis import given
+from hypothesis import strategies as st
+
+from hap.lib import sequence as seqmod
 
 _HDR_ALPHABET = list("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 
@@ -18,7 +19,8 @@ _HDR_ALPHABET = list("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345
     )
 )
 def test_roundtrip_tsv_fasta(records):
-    import tempfile, os
+    import os
+    import tempfile
     with tempfile.TemporaryDirectory() as d:
         tsv = os.path.join(d, "r.tsv")
         with open(tsv, "w") as fh:

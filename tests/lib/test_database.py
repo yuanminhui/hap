@@ -1,10 +1,9 @@
+
 import psycopg2
 import pytest
-from unittest.mock import mock_open, patch, MagicMock
 
-from hap.lib.config import Config
 import hap.lib.database as db
-
+from hap.lib.config import Config
 
 ### Test for class `DatabaseConnectionInfo` ###
 

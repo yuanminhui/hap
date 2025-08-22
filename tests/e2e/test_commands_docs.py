@@ -1,5 +1,7 @@
 from pathlib import Path
-from click.core import Group, Command
+
+from click.core import Command, Group
+
 from hap.__main__ import cli
 
 

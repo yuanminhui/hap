@@ -1,8 +1,7 @@
-from pathlib import Path
 from click.testing import CliRunner
 
-from hap.__main__ import cli
 import hap
+from hap.__main__ import cli
 
 
 def test_config_set_get_unset(tmp_path, monkeypatch):

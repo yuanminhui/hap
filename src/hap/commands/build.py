@@ -17,18 +17,15 @@ import psycopg2
 
 import hap
 from hap.lib import database as db
-from hap.lib import fileutil
-from hap.lib import gfa
-from hap.lib.sequence import write_fasta_or_fastq_to_tsv
-from hap.lib.elements import Region
-from hap.lib.elements import Segment
+from hap.lib import fileutil, gfa
+from hap.lib.elements import Region, Segment
 from hap.lib.error import (
-    DataInvalidError,
     DatabaseError,
+    DataInvalidError,
     InternalError,
 )
+from hap.lib.sequence import write_fasta_or_fastq_to_tsv
 from hap.lib.util_obj import ValidationResult
-
 
 # OPTIMIZE: Rewrite some DataFrame operations in a more efficient & elegant way
 # TODO: Refactor this command into data validation, data processing, and data output parts
@@ -365,7 +362,6 @@ def process_path(
         if g.vs[node]["name"] != "head" and g.vs[node]["name"] != "tail":
             segment.sources = list(set().union(segment.sources, g.vs[node]["sources"]))
             segment.frequency = max(segment.frequency, g.vs[node]["frequency"])
-        last = node
 
     # Rewrite properties if no `sub_regions` would be found
     if len(path) == 1:

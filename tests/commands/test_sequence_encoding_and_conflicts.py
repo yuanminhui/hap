@@ -1,8 +1,7 @@
 import importlib
 import types
-from pathlib import Path
+
 from click.testing import CliRunner
-import pytest
 
 from hap.__main__ import cli
 from tests.utils.data_gen import generate_fasta

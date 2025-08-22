@@ -1,15 +1,15 @@
 import importlib
-from pathlib import Path
 import types
-from click.testing import CliRunner
+
 import pytest
+from click.testing import CliRunner
 
 from hap.__main__ import cli
 from hap.lib.util_obj import ValidationResult
 from tests.utils.data_gen import (
     generate_gfa_dangling_edge,
-    generate_gfa_repeated_edge,
     generate_gfa_invalid_path_record,
+    generate_gfa_repeated_edge,
 )
 
 

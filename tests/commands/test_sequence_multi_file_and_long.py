@@ -1,8 +1,8 @@
-from click.testing import CliRunner
 import pytest
-from tests.utils.data_gen import generate_fasta, random_seq
+from click.testing import CliRunner
 
 from hap.__main__ import cli
+from tests.utils.data_gen import generate_fasta, random_seq
 
 
 def test_sequence_add_multiple_files_accumulate(fake_db_connect, tmp_path):

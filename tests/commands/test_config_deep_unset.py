@@ -1,7 +1,6 @@
-from pathlib import Path
 from click.testing import CliRunner
-import hap
 
+import hap
 from hap.__main__ import cli
 
 

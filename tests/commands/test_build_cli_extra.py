@@ -1,7 +1,7 @@
 import importlib
 import types
 from pathlib import Path
-import pytest
+
 from click.testing import CliRunner
 
 from hap.__main__ import cli
@@ -75,7 +75,7 @@ def _stub_graph_ok(monkeypatch):
 
 
 def test_build_invalid_multi_without_s(monkeypatch, tmp_path):
-    build = _stub_graph_ok(monkeypatch)
+    _stub_graph_ok(monkeypatch)
     g1 = Path("data/mini-example/mini-example.gfa").resolve()
     g2 = tmp_path / "b.gfa"
     g2.write_text(g1.read_text())

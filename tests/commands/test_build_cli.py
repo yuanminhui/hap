@@ -1,9 +1,9 @@
 import contextlib
-from pathlib import Path
-import types
 import importlib
+import types
+from pathlib import Path
+
 import pytest
-from click.testing import CliRunner
 
 from hap.__main__ import cli
 from hap.lib.util_obj import ValidationResult

@@ -1,6 +1,3 @@
-import io
-import os
-from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
@@ -18,7 +15,7 @@ def test_sequence_add_mixed_case_and_gap(monkeypatch, fake_db_connect, tmp_path)
 
 def test_sequence_add_illegal_chars_warn(monkeypatch, fake_db_connect, tmp_path, capsys):
     # capture click.echo warnings in the command module
-    import importlib, types
+    import importlib
     seqcli_mod = importlib.import_module("hap.commands.sequence")
     recorded: list[str] = []
     orig_sanitize = seqcli_mod.sanitize_sequence

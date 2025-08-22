@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import os
+import gzip
 import random
 from pathlib import Path
 from typing import Iterable, Tuple
-import gzip
-
 
 ALLOWED = "ATCGN-"
 

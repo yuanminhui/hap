@@ -1,5 +1,3 @@
-import os
-from pathlib import Path
 import pytest
 
 from hap.lib import gfa as gfa_mod

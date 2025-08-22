@@ -8,11 +8,9 @@ Classes:
 import os
 
 import psycopg2
+
 import hap
-
 from hap.lib.config import Config
-from hap.lib.error import DataIncompleteError
-
 
 SCRIPT_NAME_CREATE_TABLES = "create_tables.sql"
 SCRIPT_PATH_CREATE_TABLES = os.path.join(

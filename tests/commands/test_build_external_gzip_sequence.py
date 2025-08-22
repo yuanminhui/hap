@@ -1,11 +1,11 @@
-from pathlib import Path
 import importlib
 import types
+
 from click.testing import CliRunner
 
 from hap.__main__ import cli
 from hap.lib.util_obj import ValidationResult
-from tests.utils.data_gen import generate_gfa_dag, generate_fasta, gzip_file
+from tests.utils.data_gen import generate_fasta, generate_gfa_dag, gzip_file
 
 
 def test_build_with_external_gzip_fasta(monkeypatch, tmp_path):

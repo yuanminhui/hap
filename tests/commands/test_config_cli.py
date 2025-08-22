@@ -1,11 +1,7 @@
-import io
-from pathlib import Path
-import yaml
-import pytest
 from click.testing import CliRunner
 
-from hap.__main__ import cli
 import hap
+from hap.__main__ import cli
 
 
 def test_config_set_get_unset_list(tmp_path, monkeypatch):

@@ -1,7 +1,6 @@
 import importlib
-from pathlib import Path
 import types
-import pytest
+
 from click.testing import CliRunner
 
 from hap.__main__ import cli

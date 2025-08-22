@@ -1,10 +1,12 @@
 import contextlib
 import importlib
 import types
+
 from click.testing import CliRunner
+
 from hap.__main__ import cli
-from tests.data.small.mini_example import ensure_small_dataset
 from hap.lib.util_obj import ValidationResult
+from tests.data.small.mini_example import ensure_small_dataset
 
 
 def test_build_run_small_smoke(monkeypatch, tmp_path):

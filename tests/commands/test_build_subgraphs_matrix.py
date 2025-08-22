@@ -1,7 +1,7 @@
 import importlib
-import os
-from pathlib import Path
 import types
+from pathlib import Path
+
 import pytest
 from click.testing import CliRunner
 
@@ -9,11 +9,9 @@ from hap.__main__ import cli
 from hap.lib.util_obj import ValidationResult
 from tests.utils.data_gen import (
     generate_gfa_dag,
-    generate_gfa_missing_fields,
-    generate_gfa_nested,
+    generate_large_fasta_many_records,
     generate_large_gfa_many_segments,
     gzip_file,
-    generate_large_fasta_many_records,
 )
 
 

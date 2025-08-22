@@ -1,18 +1,18 @@
 import importlib
-from pathlib import Path
 import types
+
 from click.testing import CliRunner
 
 from hap.__main__ import cli
 from hap.lib.util_obj import ValidationResult
-from tests.utils.data_gen import generate_gfa_dag, generate_fasta
+from tests.utils.data_gen import generate_fasta, generate_gfa_dag
 
 
 def _stub(monkeypatch, mismatch: bool):
     build = importlib.import_module("hap.commands.build")
     gfa = importlib.import_module("hap.lib.gfa")
     db = importlib.import_module("hap.lib.database")
-    seqlib = importlib.import_module("hap.lib.sequence")
+    importlib.import_module("hap.lib.sequence")
 
     class DummyGFA:
         def __init__(self, filepath: str):

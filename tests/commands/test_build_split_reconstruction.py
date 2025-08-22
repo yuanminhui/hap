@@ -1,11 +1,11 @@
-from pathlib import Path
-from click.testing import CliRunner
 import importlib
 import types
+from pathlib import Path
+
+from click.testing import CliRunner
 
 from hap.__main__ import cli
 from hap.lib.util_obj import ValidationResult
-from tests.utils.data_gen import generate_gfa_dag
 
 
 def _stub(monkeypatch):

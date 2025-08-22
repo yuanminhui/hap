@@ -1,7 +1,8 @@
 from pathlib import Path
-from typing import Iterable, Tuple, TextIO, Optional
-from Bio import SeqIO
+from typing import Iterable, Optional, TextIO, Tuple
+
 import click
+from Bio import SeqIO
 
 _ALLOWED = set("ATCGN-")  # dash is gap
 

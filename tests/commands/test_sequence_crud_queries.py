@@ -1,7 +1,5 @@
+
 from click.testing import CliRunner
-import importlib
-import types
-import pytest
 
 from hap.__main__ import cli
 

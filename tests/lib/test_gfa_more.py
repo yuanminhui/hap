@@ -1,7 +1,4 @@
-import subprocess
-import types
 import pytest
-from pathlib import Path
 
 from hap.lib import gfa as gfa_mod
 
