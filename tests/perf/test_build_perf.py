@@ -90,6 +90,6 @@ def test_build_large_perf(tmp_path, monkeypatch):
     rss_after = proc.memory_info().rss
     delta = max(0, rss_after - rss_before)
 
-    out_dir = tmp_path / ".." / ".." / ".." / "reports" / "perf"
+    out_dir = Path("reports") / "perf"
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "build_big.csv").write_text("metric,value\nwall_time_s,%.6f\nrss_delta_bytes,%d\n" % (elapsed, delta))

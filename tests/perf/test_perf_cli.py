@@ -1,5 +1,6 @@
 import os
 import time
+from pathlib import Path
 import psutil
 import pytest
 from click.testing import CliRunner
@@ -69,7 +70,7 @@ def test_sequence_add_large_file(tmp_path, monkeypatch):
     assert peak_delta < 300 * 1024 * 1024
 
     # Emit simple CSV under reports/perf
-    out_dir = tmp_path / ".." / ".." / ".." / "reports" / "perf"
+    out_dir = Path("reports") / "perf"
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "sequence_add_large.csv").write_text(
         "metric,value\nwall_time_s,%.6f\nrss_delta_bytes,%d\n" % (elapsed, peak_delta)

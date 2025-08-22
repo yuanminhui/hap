@@ -57,5 +57,5 @@ def test_sequence_perf_sizes(tmp_path, monkeypatch, label: str, num_records: int
         return CliRunner().invoke(cli, ["sequence", "add", "--fasta", str(fa)])
     r, elapsed, delta = _measure(_run)
     assert r.exit_code == 0
-    out = tmp_path / ".." / ".." / ".." / "reports" / "perf" / f"sequence_add_{label}.csv"
+    out = Path("reports") / "perf" / f"sequence_add_{label}.csv"
     _write_csv(out, elapsed, delta)
