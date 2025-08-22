@@ -68,21 +68,39 @@ def _stub(monkeypatch):
 
 
 def test_split_reconstruction_counts(monkeypatch, tmp_path):
-    # Create base and parts with disjoint segments
+    # Create base and parts with disjoint segments and edges
     base = tmp_path / "base.gfa"
+    # 0..9 nodes, linear edges 0->1->...->9
     generate_gfa_dag(base, num_nodes=10)
     parts_dir = tmp_path / "parts"; parts_dir.mkdir()
     p1 = parts_dir / "p1.gfa"; p2 = parts_dir / "p2.gfa"
-    # First part nodes 0..4, second part 5..9
-    p1.write_text("H\tVN:Z:1.0\n" + "".join([f"S\ts{i}\t*\tLN:i:1\n" for i in range(5)]))
-    p2.write_text("H\tVN:Z:1.0\n" + "".join([f"S\ts{i}\t*\tLN:i:1\n" for i in range(5, 10)]))
+    # First part nodes 0..4, edges within this range
+    p1.write_text(
+        "H\tVN:Z:1.0\n"
+        + "".join([f"S\ts{i}\t*\tLN:i:1\n" for i in range(5)])
+        + "".join([f"L\ts{i}\t+\ts{i+1}\t+\t0M\n" for i in range(4)])
+    )
+    # Second part nodes 5..9, edges within this range
+    p2.write_text(
+        "H\tVN:Z:1.0\n"
+        + "".join([f"S\ts{i}\t*\tLN:i:1\n" for i in range(5, 10)])
+        + "".join([f"L\ts{i}\t+\ts{i+1}\t+\t0M\n" for i in range(5, 9)])
+    )
 
     def count_S(path: Path) -> int:
         return sum(1 for line in path.read_text().splitlines() if line.startswith("S\t"))
 
+    def count_L(path: Path) -> int:
+        return sum(1 for line in path.read_text().splitlines() if line.startswith("L\t"))
+
     original_S = count_S(base)
+    original_L = count_L(base)
     parts_S = count_S(p1) + count_S(p2)
-    assert parts_S == original_S  # 拼接正确性（段数量）
+    parts_L = count_L(p1) + count_L(p2)
+    # 拼接正确性（段/边数量）
+    assert parts_S == original_S
+    # 边数少于原始（不跨分块），允许 <= 原始
+    assert parts_L <= original_L
 
     _stub(monkeypatch)
     r = CliRunner().invoke(cli, [
