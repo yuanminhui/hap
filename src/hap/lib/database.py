@@ -39,10 +39,17 @@ class DatabaseConnectionInfo:
         self.dbname = dbname
 
     def __str__(self):
-        return f"host={self.host} port={self.port} user={self.user} password={self.password} dbname={self.dbname}"
+        return (
+            f"host={self.host} port={self.port} user={self.user} "
+            f"password={self.password} dbname={self.dbname}"
+        )
 
     def __repr__(self):
-        return f"DatabaseConnectionInfo(host={self.host}, port={self.port}, user={self.user}, password={self.password}, dbname={self.dbname})"
+        return (
+            "DatabaseConnectionInfo("
+            f"host={self.host}, port={self.port}, user={self.user}, "
+            f"password={self.password}, dbname={self.dbname})"
+        )
 
     def is_complete(self) -> bool:
         return all([self.host, self.port, self.user, self.password, self.dbname])

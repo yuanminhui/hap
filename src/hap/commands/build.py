@@ -331,19 +331,11 @@ def process_path(
         while node in path_starts:
             # find the farther predecessor
             # other = None
+            s = None
             for predecessor in g.neighbors(node, mode="in"):
-                if predecessor in visited and predecessor != last:
+                if predecessor in visited:
                     s = predecessor
                     break
-                    # if other == None:
-                    #     other = pr
-                    #     otherspaths = g.get_all_simple_paths(pr, node)
-                    # else:
-                    #     s = pr
-                    #     for path in otherspaths:
-                    #         if pr in path:
-                    #             s = other
-                    #             break
             if not s:
                 raise DataInvalidError(
                     "Unable to resolve complex graph structure. Flatten the graph and rerun."

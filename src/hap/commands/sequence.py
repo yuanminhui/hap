@@ -74,33 +74,33 @@ def add(fasta: Path):
     seqs = list(read_sequences_from_fasta(fasta))
     ext_ids = [hdr for hdr, _ in seqs]
     id_map = resolve_segment_ids(conn, ext_ids)
-    # Fetch existing lengths
+
+    imported_count = 0
     with conn.cursor() as cur:
+        # Fetch existing lengths
         cur.execute(
             "SELECT id, length FROM segment WHERE id = ANY(%s)",
             (list(id_map.values()),),
         )
         lengths = dict(cur.fetchall())
-    valid = []
-    for hdr, raw in seqs:
-        seg_id = id_map.get(hdr)
-        if not seg_id:
-            click.echo(f"[WARN] {hdr}: not found in DB – skipped", err=True)
-            continue
-        seq = sanitize_sequence(raw, hdr)
-        if not seq:
-            continue
-        l = lengths.get(seg_id)
-        if l is not None and l != len(seq):
-            click.echo(
-                f"[WARN] {hdr}: length mismatch (DB: {l}, input: {len(seq)}) – skipped",
-                err=True,
-            )
-            continue
-        valid.append((seg_id, seq))
-    # Write to DB
-    with conn.cursor() as cur:
-        for seg_id, seq in valid:
+
+        for hdr, raw in seqs:
+            seg_id = id_map.get(hdr)
+            if not seg_id:
+                click.echo(f"[WARN] {hdr}: not found in DB – skipped", err=True)
+                continue
+            seq = sanitize_sequence(raw, hdr)
+            if not seq:
+                continue
+            known_length = lengths.get(seg_id)
+            if known_length is not None and known_length != len(seq):
+                msg = (
+                    f"[WARN] Length mismatch for {seg_id}: existing length {known_length}, "
+                    f"new length {len(seq)}; skipping."
+                )
+                click.echo(msg, err=True)
+                continue
+            # upsert
             cur.execute(
                 "INSERT INTO segment_sequence (id, segment_sequence) VALUES (%s, %s) "
                 "ON CONFLICT (id) DO UPDATE SET segment_sequence = EXCLUDED.segment_sequence",
@@ -111,8 +111,10 @@ def add(fasta: Path):
                 "UPDATE segment SET length = %s WHERE id = %s AND length IS NULL",
                 (len(seq), seg_id),
             )
+            imported_count += 1
+
     conn.commit()
-    click.echo(f"Imported {len(valid)} sequences.")
+    click.echo(f"Imported {imported_count} sequences.")
 
 
 @main.command()
@@ -143,7 +145,10 @@ def get(ids: tuple[str, ...], regex: str, fmt: str):
                 click.echo("No valid IDs found.", err=True)
                 return
             cur.execute(
-                "SELECT semantic_id, segment_sequence FROM segment JOIN segment_sequence USING (id) WHERE id = ANY(%s)",
+                (
+                    "SELECT semantic_id, segment_sequence FROM segment JOIN segment_sequence "
+                    "USING (id) WHERE id = ANY(%s)"
+                ),
                 (list(id_map.values()),),
             )
             out = cur.fetchall()
@@ -175,15 +180,19 @@ def edit(id: str, newseq: str):
     with conn.cursor() as cur:
         cur.execute("SELECT length FROM segment WHERE id = %s", (seg_id,))
         row = cur.fetchone()
-        l = row[0] if row else None
-        if l is not None and l != len(seq):
-            click.echo(
-                f"[ERROR] {id}: length mismatch (DB: {l}, input: {len(seq)})",
-                err=True,
+        known_length = row[0] if row else None
+        if known_length is not None and known_length != len(seq):
+            msg = (
+                f"[WARN] Length mismatch for {seg_id}: existing length {known_length}, "
+                f"new length {len(seq)}; skipping."
             )
+            click.echo(msg, err=True)
             return
         cur.execute(
-            "INSERT INTO segment_sequence (id, segment_sequence) VALUES (%s, %s) ON CONFLICT (id) DO UPDATE SET segment_sequence = EXCLUDED.segment_sequence",
+            (
+                "INSERT INTO segment_sequence (id, segment_sequence) VALUES (%s, %s) "
+                "ON CONFLICT (id) DO UPDATE SET segment_sequence = EXCLUDED.segment_sequence"
+            ),
             (seg_id, seq),
         )
         cur.execute(

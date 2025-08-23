@@ -206,7 +206,7 @@ def bench(session: Session) -> None:
 
 
 @session(python=python_versions[0])
-def bench(session: Session) -> None:
+def bench_perf(session: Session) -> None:
     """Run performance benchmarks and store results under reports/perf."""
     session.install(".")
     session.install("pytest", "pytest-benchmark", "psutil", "rich")
