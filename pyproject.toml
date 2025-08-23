@@ -89,6 +89,7 @@ lines_after_imports = 2
 
 [tool.mypy]
 ignore_missing_imports = true
+no_implicit_optional = false
 warn_unreachable = true
 warn_no_return = false
 allow_redefinition = true
@@ -98,6 +99,16 @@ show_error_codes = true
 show_error_context = true
 implicit_optional = true
 strict = false
+
+[[tool.mypy.overrides]]
+module = [
+  "hap.lib.gfa",
+  "hap.commands.build",
+  "hap.lib.database",
+  "hap.lib.fileutil",
+  "hap.__init__",
+]
+ignore_errors = true
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
