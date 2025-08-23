@@ -95,7 +95,7 @@ def add(fasta: Path):
             known_length = lengths.get(seg_id)
             if known_length is not None and known_length != len(seq):
                 msg = (
-                    f"[WARN] Length mismatch for {seg_id}: existing length {known_length}, "
+                    f"[WARN] length mismatch for {seg_id}: existing length {known_length}, "
                     f"new length {len(seq)}; skipping."
                 )
                 click.echo(msg, err=True)
@@ -183,7 +183,7 @@ def edit(id: str, newseq: str):
         known_length = row[0] if row else None
         if known_length is not None and known_length != len(seq):
             msg = (
-                f"[WARN] Length mismatch for {seg_id}: existing length {known_length}, "
+                f"[WARN] length mismatch for {seg_id}: existing length {known_length}, "
                 f"new length {len(seq)}; skipping."
             )
             click.echo(msg, err=True)

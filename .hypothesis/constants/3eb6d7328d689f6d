@@ -1,0 +1,4 @@
+# file: /workspace/src/hap/lib/gfa.py
+# hypothesis_version: 6.138.2
+
+[1.0, 1.1, 1.2, 2.0, '\tLN:', ' ...', "$'\\t'", "'^(E|J|W)'", "'^(O|U)'", "'^S\t[^\t]+\t[^\t*]+'", "'^S.*\tLN:'", "'{print $4}'", ',', ', ', '-', '-1', '-2', '-E', '-e', '-f', '-i', '-k', '-m', '-n', '-o', '-t', '-u', '-v', '.gfa', '.seq.tsv', '/', '/bin/bash', '1', '1,1', '1.1,1.2', '1i\\source\\ttarget', '2', '2,2', '2.1,2.2', '<unknown>', '>', 'E', 'J', 'LC_ALL=C', 'S\t', 'W', '^(O|U)', '^E', '^L', '^P', '^S', '^W', 'awk', 'cat', 'float32', 'frequency', 'gfa', 'gfa12csv.awk', 'gfa22csv.awk', 'grep', 'head', 'int32', 'join', 'key', 'length', 'name', 'parse_pansn_str.awk', 'r', 'sed', 'sort', 'source', 'sources', 'str', 'target', 'value', '|']

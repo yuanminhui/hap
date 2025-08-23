@@ -1,0 +1,4 @@
+# file: /workspace/src/hap/__init__.py
+# hypothesis_version: 6.138.2
+
+['--help', '-h', '0.1.0', 'hap', 'hap.yaml', 'yuanminhui']
