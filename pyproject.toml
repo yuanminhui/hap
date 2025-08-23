@@ -53,8 +53,6 @@ pytest-benchmark = "^4.0.0"
 pytest-rerunfailures = "^14.0"
 hypothesis = "^6.112.0"
 ruff = "^0.5.0"
-black = ">=21.10b0"
-mypy = ">=0.930"
 psutil = "^6.0.0"
 rich = "^13.7.1"
 pyupgrade = ">=2.29.1"
@@ -107,6 +105,8 @@ module = [
   "hap.lib.database",
   "hap.lib.fileutil",
   "hap.__init__",
+  "hap.lib.sequence",
+  "hap.commands.sequence",
 ]
 ignore_errors = true
 

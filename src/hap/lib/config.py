@@ -106,6 +106,8 @@ class Config:
             if k not in nested_config:
                 nested_config[k] = {}
             nested_config = nested_config[k]
+        # At this point, nested_config must be a dict
+        assert isinstance(nested_config, dict)
         nested_config[keys[-1]] = value
 
     def unset_nested_value(self, key: str):
