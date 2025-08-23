@@ -7,6 +7,7 @@ import pytest
 
 from hap.__main__ import cli
 from hap.lib.util_obj import ValidationResult
+from click.testing import CliRunner
 
 
 @pytest.fixture()
@@ -306,3 +307,86 @@ def test_build_validate_arg_path(monkeypatch, runner, tmp_path, gfa_rel_path):
         ],
     )
     assert r.exit_code == 0
+
+
+def test_build_graph2rstree_smoke(monkeypatch, tmp_path):
+    build = importlib.import_module("hap.commands.build")
+    gfa = importlib.import_module("hap.lib.gfa")
+
+    # Minimal GFA stub
+    class DummyGFA:
+        def __init__(self, filepath: str):
+            self.filepath = filepath
+        def is_valid(self):
+            return True
+        def can_extract_length(self):
+            return True
+        def ensure_length_completeness(self):
+            return None
+        def separate_sequence(self, output_dir: str):
+            return (self.filepath, None)
+        def divide_into_subgraphs(self, outdir: str, chr_only: bool = True):
+            return [("", self.filepath)]
+        def to_igraph(self):
+            class G:
+                is_dag = True
+                def is_connected(self, mode="WEAK"):
+                    return True
+            return G()
+    monkeypatch.setattr(gfa, "GFA", DummyGFA)
+
+    called = {"g2r": 0}
+    def _g2r(graph):
+        called["g2r"] += 1
+        # return minimal rt, st, meta
+        import pandas as pd
+        return pd.DataFrame(), pd.DataFrame(), {"sources": [], "name": "t"}
+
+    monkeypatch.setattr(build, "validate_gfa", lambda gfa_obj: types.SimpleNamespace(valid=True, message=""))
+    monkeypatch.setattr(build, "validate_graph", lambda graph: types.SimpleNamespace(valid=True, message=""))
+    monkeypatch.setattr(build, "graph2rstree", _g2r)
+    monkeypatch.setattr(build, "calculate_properties_l2r", lambda rt, st, meta: (rt, st, meta))
+    monkeypatch.setattr(build, "wrap_rstree", lambda rt, st, meta, mr: (rt, st, meta))
+    monkeypatch.setattr(build, "calculate_properties_r2l", lambda rt, st, meta: (rt, st, meta))
+    # Force subgraph builder path to call into pipeline
+    def _builder(items, min_res, temp_dir):
+        out = []
+        for n, p in items:
+            rt, st, meta = build.graph2rstree(None)
+            rt, st, meta = build.calculate_properties_l2r(rt, st, meta)
+            rt, st, meta = build.wrap_rstree(rt, st, meta, min_res)
+            rt, st, meta = build.calculate_properties_r2l(rt, st, meta)
+            out.append((rt, st, meta, None))
+        return out
+    monkeypatch.setattr(build, "build_subgraphs_with_sequence_in_parallel", _builder)
+    monkeypatch.setattr(build, "hap2db", lambda hap_info, subgraphs, conn: None)
+    monkeypatch.setattr(build, "check_name", lambda n: True)
+    # Stub DB connection
+    db = importlib.import_module("hap.lib.database")
+    class _C:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def cursor(self):
+            class C:
+                def __enter__(self):
+                    return self
+                def __exit__(self, *a):
+                    return False
+                def execute(self, *a, **k):
+                    pass
+                def fetchone(self):
+                    return (1,)
+                def fetchall(self):
+                    return []
+            return C()
+        def commit(self):
+            pass
+    monkeypatch.setattr(db, "auto_connect", lambda: _C())
+
+    g = tmp_path / "x.gfa"
+    g.write_text("H\tVN:Z:1.0\nS\ts0\t*\tLN:i:1\n")
+    r = CliRunner().invoke(cli, ["build", "run", str(g), "-n", "t", "-a", "c", "-c", "u", "-x", ""])
+    assert r.exit_code == 0
+    assert called["g2r"] == 1

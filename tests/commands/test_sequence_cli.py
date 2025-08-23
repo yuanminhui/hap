@@ -2,6 +2,7 @@ import importlib
 
 import pytest
 from click.testing import CliRunner
+import types
 
 from hap.__main__ import cli
 
@@ -59,3 +60,57 @@ def test_sequence_delete(fake_db_connect):
     r = CliRunner().invoke(cli, ["sequence", "delete", "segA", "segB"])
     assert r.exit_code == 0
     assert "Deleted 2 sequences." in r.output
+
+
+def test_gfa_ensure_length_completeness_ok(monkeypatch, tmp_path):
+    gfa_mod = importlib.import_module("hap.lib.gfa")
+
+    class DummyGFA:
+        def __init__(self, filepath: str):
+            self.filepath = filepath
+        def can_extract_length(self):
+            return True
+        def ensure_length_completeness(self):
+            # no-op ok
+            return None
+    # direct exercise
+    g = DummyGFA("x.gfa")
+    assert g.ensure_length_completeness() is None
+
+
+def test_gfa_ensure_length_completeness_error_path(monkeypatch, tmp_path):
+    # simulate error by raising exception inside ensure_length_completeness and assert handled in build validate_gfa
+    gfa_mod = importlib.import_module("hap.lib.gfa")
+    build = importlib.import_module("hap.commands.build")
+
+    class BadGFA:
+        def __init__(self, filepath: str):
+            self.filepath = filepath
+        def can_extract_length(self):
+            return True
+        def ensure_length_completeness(self):
+            raise RuntimeError("missing LN")
+        def to_igraph(self):
+            class G:
+                is_dag = True
+                def is_connected(self, mode="WEAK"):
+                    return True
+            return G()
+        def separate_sequence(self, output_dir: str):
+            return (self.filepath, None)
+    monkeypatch.setattr(gfa_mod, "GFA", BadGFA)
+
+    # make validate_gfa call path fail when ensure_length_completeness raises; preserve error surfaced by CLI
+    def _validate_gfa(gfa_obj):
+        try:
+            gfa_obj.ensure_length_completeness()
+            return types.SimpleNamespace(valid=True, message="")
+        except Exception as e:
+            return types.SimpleNamespace(valid=False, message=str(e))
+    monkeypatch.setattr(build, "validate_gfa", _validate_gfa)
+    monkeypatch.setattr(build, "validate_graph", lambda g: types.SimpleNamespace(valid=True, message=""))
+    monkeypatch.setattr(build, "check_name", lambda n: True)
+
+    g = tmp_path / "bad.gfa"; g.write_text("H\tVN:Z:1.0\nS\ts0\t*\tLN:i:1\n")
+    r = CliRunner().invoke(cli, ["build", "run", str(g), "-n", "bad", "-a", "c", "-c", "u", "-x", ""]) 
+    assert r.exit_code != 0

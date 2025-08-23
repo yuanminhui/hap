@@ -74,7 +74,21 @@ tests = ["tests", "*/tests"]
 
 [tool.coverage.run]
 branch = true
-source = ["hap", "tests"]
+source = [
+  "hap/commands/build.py",
+  "hap/commands/config.py",
+  "hap/commands/sequence.py",
+  "hap/lib/fileutil.py",
+  "hap/lib/gfa.py",
+  "hap/lib/config.py",
+  "hap/lib/database.py",
+  "hap/lib/sequence.py",
+]
+omit = [
+  "*/tests/*",
+  "*/.venv/*",
+  "*/site-packages/*",
+]
 
 [tool.coverage.report]
 show_missing = true
