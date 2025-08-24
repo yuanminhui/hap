@@ -50,9 +50,12 @@ def test_get_name_from_context(tmp_path, monkeypatch):
     assert name2 == "hello"
 
 
-def test_check_name_and_get_username(monkeypatch):
+def test_check_name_and_get_username(monkeypatch, tmp_path):
     build = importlib.import_module("hap.commands.build")
     db = importlib.import_module("hap.lib.database")
+    # Stub create tables script path
+    sql = tmp_path / "create.sql"; sql.write_text("-- noop\n")
+    monkeypatch.setattr(db, "SCRIPT_PATH_CREATE_TABLES", str(sql), raising=False)
     # DB stub to simulate no existing name
     class _C:
         def __enter__(self):
