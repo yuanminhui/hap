@@ -4,15 +4,15 @@ import sys
 
 def _rt_st_meta(pd_mod):
     rt = pd_mod.DataFrame([
-        {"id": "r1", "type": "con", "level_range": [0, 0], "segments": ["s1", "s2"], "length": 0, "min_length": 0, "total_variants": 0, "parent_segment": None},
-        {"id": "r2", "type": "con", "level_range": [1, 1], "segments": ["s3"], "length": 0, "min_length": 0, "total_variants": 0, "parent_segment": None},
+        {"id": "r1", "type": "con", "level_range": [0, 0], "segments": ["s1", "s2"], "length": 0, "min_length": 0, "total_variants": 0, "parent_segment": None, "semantic_id": None, "coordinate": None},
+        {"id": "r2", "type": "con", "level_range": [1, 1], "segments": ["s3"], "length": 0, "min_length": 0, "total_variants": 0, "parent_segment": None, "semantic_id": None, "coordinate": None},
     ])
     st = pd_mod.DataFrame([
-        {"id": "s1", "level_range": [0, 0], "sub_regions": [], "length": 10, "total_variants": 0, "direct_variants": 0, "sources": [], "parent_segment": None},
-        {"id": "s2", "level_range": [0, 0], "sub_regions": [], "length": 12, "total_variants": 0, "direct_variants": 0, "sources": [], "parent_segment": None},
-        {"id": "s3", "level_range": [1, 1], "sub_regions": ["r1"], "length": 0, "total_variants": 0, "direct_variants": 0, "sources": [], "parent_segment": None},
+        {"id": "s1", "level_range": [0, 0], "sub_regions": [], "length": 10, "total_variants": 0, "direct_variants": 0, "sources": [], "semantic_id": None, "coordinate": None},
+        {"id": "s2", "level_range": [0, 0], "sub_regions": [], "length": 12, "total_variants": 0, "direct_variants": 0, "sources": [], "semantic_id": None, "coordinate": None},
+        {"id": "s3", "level_range": [1, 1], "sub_regions": ["r1"], "length": 0, "total_variants": 0, "direct_variants": 0, "sources": [], "semantic_id": None, "coordinate": None},
     ])
-    meta = {"sources": [], "name": "t"}
+    meta = {"sources": [], "name": "t", "max_level": 0, "total_length": 22}
     return rt, st, meta
 
 
