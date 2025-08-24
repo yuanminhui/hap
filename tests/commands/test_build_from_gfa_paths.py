@@ -58,7 +58,7 @@ def test_build_from_gfa_without_sequence_file(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "auto_connect", lambda: _C())
 
     gfa_file = tmp_path / "g.gfa"; gfa_file.write_text("H\tVN:Z:1.0\nS\ts0\t*\tLN:i:1\n")
-    rt, st, meta, seq = build.build_from_gfa(str(gfa_file), sequence_file=None, min_resolution=1.0, temp_dir=str(tmp_path))
+    rt, st, meta, seq = build.build_from_gfa(subgraph_name="t", gfa_path=str(gfa_file), sequence_file=None, min_resolution=1.0, temp_dir=str(tmp_path))
     assert called["g2r"] == 1 and seq is None
 
 
@@ -114,5 +114,5 @@ def test_build_from_gfa_with_sequence_file(tmp_path, monkeypatch):
 
     gfa_file = tmp_path / "g.gfa"; gfa_file.write_text("H\tVN:Z:1.0\nS\ts0\t*\tLN:i:1\n")
     tsv = tmp_path / "nodes.tsv"; tsv.write_text("s0\tA\n")
-    rt, st, meta, seq = build.build_from_gfa(str(gfa_file), sequence_file=str(tsv), min_resolution=1.0, temp_dir=str(tmp_path))
+    rt, st, meta, seq = build.build_from_gfa(subgraph_name="t", gfa_path=str(gfa_file), sequence_file=str(tsv), min_resolution=1.0, temp_dir=str(tmp_path))
     assert seq == str(tsv)

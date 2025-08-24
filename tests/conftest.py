@@ -36,47 +36,50 @@ if "igraph" not in sys.modules:
     igraph_stub.Graph = _Graph
     sys.modules["igraph"] = igraph_stub
 
-# Stub pandas (only for type hints in imported modules; tests won't use real DataFrame ops)
-if "pandas" not in sys.modules:
-    pandas_stub = types.ModuleType("pandas")
+# Stub pandas only if not installed
+try:
+    import pandas as _real_pandas  # noqa: F401
+except Exception:
+    if "pandas" not in sys.modules:
+        pandas_stub = types.ModuleType("pandas")
 
-    class _DF:
-        def __init__(self, *args, **kwargs):
-            self._data = args if args else kwargs
+        class _DF:
+            def __init__(self, *args, **kwargs):
+                self._data = args if args else kwargs
 
-        # Provide minimal methods accessed in build.hap2db if accidentally used
-        def to_csv(self, *args, **kwargs):
-            pass
+            # Provide minimal methods accessed in build.hap2db if accidentally used
+            def to_csv(self, *args, **kwargs):
+                pass
 
-        def merge(self, *args, **kwargs):
-            return self
+            def merge(self, *args, **kwargs):
+                return self
 
-        def drop(self, *args, **kwargs):
-            return self
+            def drop(self, *args, **kwargs):
+                return self
 
-        def explode(self, *args, **kwargs):
-            return self
+            def explode(self, *args, **kwargs):
+                return self
 
-        def sort_values(self, *args, **kwargs):
-            return self
+            def sort_values(self, *args, **kwargs):
+                return self
 
-        def astype(self, *args, **kwargs):
-            return self
+            def astype(self, *args, **kwargs):
+                return self
 
-        def apply(self, *args, **kwargs):
-            return self
+            def apply(self, *args, **kwargs):
+                return self
 
-        def __getitem__(self, item):
-            return self
+            def __getitem__(self, item):
+                return self
 
-        def isin(self, *args, **kwargs):
-            return False
+            def isin(self, *args, **kwargs):
+                return False
 
-        def itertuples(self):
-            return []
+            def itertuples(self):
+                return []
 
-    pandas_stub.DataFrame = _DF
-    sys.modules["pandas"] = pandas_stub
+        pandas_stub.DataFrame = _DF
+        sys.modules["pandas"] = pandas_stub
 
 # Stub psycopg2 (tests do not connect to real DB)
 if "psycopg2" not in sys.modules:
