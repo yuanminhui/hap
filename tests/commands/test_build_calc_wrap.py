@@ -1,5 +1,6 @@
 import importlib
 import pandas as pd
+import sys
 
 
 def _rt_st_meta():
@@ -19,6 +20,8 @@ def _rt_st_meta():
 
 
 def test_calculate_and_wrap_properties(monkeypatch):
+    # ensure sys.modules holds real pandas for subsequent imports
+    sys.modules["pandas"] = pd
     import importlib as _il
     build = importlib.import_module("hap.commands.build")
     build = _il.reload(build)
