@@ -19,7 +19,9 @@ def _rt_st_meta():
 
 
 def test_calculate_and_wrap_properties(monkeypatch):
+    import importlib as _il
     build = importlib.import_module("hap.commands.build")
+    build = _il.reload(build)
     # ensure real pandas inside build
     monkeypatch.setattr(build, "pd", pd, raising=False)
     rt, st, meta = _rt_st_meta()
