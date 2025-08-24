@@ -15,6 +15,8 @@ def test_build_from_gfa_without_sequence_file(tmp_path, monkeypatch):
             return ["h1"]
         def ensure_length_completeness(self):
             return None
+        def separate_sequence(self, temp_dir):
+            return (self.filepath, None)
         def to_igraph(self):
             class G:
                 is_dag = True
@@ -75,6 +77,8 @@ def test_build_from_gfa_with_sequence_file(tmp_path, monkeypatch):
             return ["h1"]
         def ensure_length_completeness(self):
             return None
+        def separate_sequence(self, temp_dir):
+            return (self.filepath, None)
         def to_igraph(self):
             class G:
                 is_dag = True

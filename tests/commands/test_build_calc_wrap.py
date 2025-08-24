@@ -18,8 +18,10 @@ def _rt_st_meta():
     return rt, st, meta
 
 
-def test_calculate_and_wrap_properties():
+def test_calculate_and_wrap_properties(monkeypatch):
     build = importlib.import_module("hap.commands.build")
+    # ensure real pandas inside build
+    monkeypatch.setattr(build, "pd", pd, raising=False)
     rt, st, meta = _rt_st_meta()
     # l2r fills region types/semantic ids and segment stats
     rt2, st2, meta2 = build.calculate_properties_l2r(rt.copy(), st.copy(), meta.copy())
