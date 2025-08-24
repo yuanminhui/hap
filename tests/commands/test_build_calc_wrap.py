@@ -28,7 +28,8 @@ def test_calculate_and_wrap_properties(monkeypatch):
     rt, st, meta = _rt_st_meta(pd)
     rt2, st2, meta2 = build.calculate_properties_l2r(rt.copy(), st.copy(), meta.copy())
     assert (rt2["length"] >= 0).all()
-    rt3, st3, meta3 = build.wrap_rstree(rt2.copy(), st2.copy(), meta2.copy(), min_resolution=0.5)
+    # use small min_resolution to keep max_level non-negative for small total_length
+    rt3, st3, meta3 = build.wrap_rstree(rt2.copy(), st2.copy(), meta2.copy(), min_resolution=0.01)
     assert "max_level" in meta3 and meta3["max_level"] >= 0
     rt4, st4, meta4 = build.calculate_properties_r2l(rt3.copy(), st3.copy(), meta3.copy())
     assert isinstance(rt4, pd.DataFrame) and isinstance(st4, pd.DataFrame)
