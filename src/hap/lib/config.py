@@ -5,9 +5,10 @@ Classes:
     Config: A class to manipulate the configuration data object.
 """
 
-from typing import Any
-import yaml
 import json
+from typing import Any
+
+import yaml
 
 from hap.lib.error import UnsupportedError
 
@@ -105,6 +106,8 @@ class Config:
             if k not in nested_config:
                 nested_config[k] = {}
             nested_config = nested_config[k]
+        # At this point, nested_config must be a dict
+        assert isinstance(nested_config, dict)
         nested_config[keys[-1]] = value
 
     def unset_nested_value(self, key: str):

@@ -1,17 +1,18 @@
 import contextlib
-from pathlib import Path
-import types
 import importlib
+import types
+from pathlib import Path
+
 import pytest
-from click.testing import CliRunner
 
 from hap.__main__ import cli
 from hap.lib.util_obj import ValidationResult
+from click.testing import CliRunner
 
 
 @pytest.fixture()
-def gfa_rel_path(existing_mini_example_files):
-    return existing_mini_example_files["gfa"]
+def gfa_rel_path():
+    return Path("data/mini-example/mini-example.gfa")
 
 
 def _monkey_build_pipeline(monkeypatch, gfa_path, seq_file=None):
@@ -107,7 +108,7 @@ def test_build_run_no_sequence_file(monkeypatch, runner, gfa_rel_path):
         [
             "build",
             "run",
-            str(gfa_rel_path),
+            str(gfa_rel_path.resolve()),
             "-n",
             "hap1",
             "-a",
@@ -128,14 +129,14 @@ def test_build_run_with_fasta_sequence_file(monkeypatch, runner, tmp_path, gfa_r
     captured = _monkey_build_pipeline(monkeypatch, gfa_rel_path)
 
     # Use the repository nodes.fa (relative path) as external sequence file
-    nodes_fa = existing_mini_example_files["nodes"]
+    nodes_fa = Path("data/mini-example/nodes.fa")
 
     r = runner.invoke(
         cli,
         [
             "build",
             "run",
-            str(gfa_rel_path),
+            str(gfa_rel_path.resolve()),
             "-n",
             "hap2",
             "-a",
@@ -156,7 +157,7 @@ def test_build_run_with_tsv_sequence_file(monkeypatch, runner, tmp_path, gfa_rel
     captured = _monkey_build_pipeline(monkeypatch, gfa_rel_path)
 
     # Convert nodes.fa to TSV in a tmp
-    nodes_fa = existing_mini_example_files["nodes"]
+    nodes_fa = Path("data/mini-example/nodes.fa")
     tsv = tmp_path / "nodes.tsv"
     # Simple conversion: id<tab>seq
     content = nodes_fa.read_text().splitlines()
@@ -170,7 +171,7 @@ def test_build_run_with_tsv_sequence_file(monkeypatch, runner, tmp_path, gfa_rel
         [
             "build",
             "run",
-            str(gfa_rel_path),
+            str(gfa_rel_path.resolve()),
             "-n",
             "hap3",
             "-a",
@@ -195,7 +196,7 @@ def test_build_run_sequence_file_is_dir_error(monkeypatch, runner, tmp_path, gfa
         [
             "build",
             "run",
-            str(gfa_rel_path),
+            str(gfa_rel_path.resolve()),
             "-n",
             "hap4",
             "-a",
@@ -221,7 +222,7 @@ def test_build_validate_arg_path(monkeypatch, runner, tmp_path, gfa_rel_path):
         [
             "build",
             "run",
-            str(gfa_rel_path),
+            str(gfa_rel_path.resolve()),
             str(g2),
             "-n",
             "hap5",
@@ -306,3 +307,86 @@ def test_build_validate_arg_path(monkeypatch, runner, tmp_path, gfa_rel_path):
         ],
     )
     assert r.exit_code == 0
+
+
+def test_build_graph2rstree_smoke(monkeypatch, tmp_path):
+    build = importlib.import_module("hap.commands.build")
+    gfa = importlib.import_module("hap.lib.gfa")
+
+    # Minimal GFA stub
+    class DummyGFA:
+        def __init__(self, filepath: str):
+            self.filepath = filepath
+        def is_valid(self):
+            return True
+        def can_extract_length(self):
+            return True
+        def ensure_length_completeness(self):
+            return None
+        def separate_sequence(self, output_dir: str):
+            return (self.filepath, None)
+        def divide_into_subgraphs(self, outdir: str, chr_only: bool = True):
+            return [("", self.filepath)]
+        def to_igraph(self):
+            class G:
+                is_dag = True
+                def is_connected(self, mode="WEAK"):
+                    return True
+            return G()
+    monkeypatch.setattr(gfa, "GFA", DummyGFA)
+
+    called = {"g2r": 0}
+    def _g2r(graph):
+        called["g2r"] += 1
+        # return minimal rt, st, meta
+        import pandas as pd
+        return pd.DataFrame(), pd.DataFrame(), {"sources": [], "name": "t"}
+
+    monkeypatch.setattr(build, "validate_gfa", lambda gfa_obj: types.SimpleNamespace(valid=True, message=""))
+    monkeypatch.setattr(build, "validate_graph", lambda graph: types.SimpleNamespace(valid=True, message=""))
+    monkeypatch.setattr(build, "graph2rstree", _g2r)
+    monkeypatch.setattr(build, "calculate_properties_l2r", lambda rt, st, meta: (rt, st, meta))
+    monkeypatch.setattr(build, "wrap_rstree", lambda rt, st, meta, mr: (rt, st, meta))
+    monkeypatch.setattr(build, "calculate_properties_r2l", lambda rt, st, meta: (rt, st, meta))
+    # Force subgraph builder path to call into pipeline
+    def _builder(items, min_res, temp_dir):
+        out = []
+        for n, p in items:
+            rt, st, meta = build.graph2rstree(None)
+            rt, st, meta = build.calculate_properties_l2r(rt, st, meta)
+            rt, st, meta = build.wrap_rstree(rt, st, meta, min_res)
+            rt, st, meta = build.calculate_properties_r2l(rt, st, meta)
+            out.append((rt, st, meta, None))
+        return out
+    monkeypatch.setattr(build, "build_subgraphs_with_sequence_in_parallel", _builder)
+    monkeypatch.setattr(build, "hap2db", lambda hap_info, subgraphs, conn: None)
+    monkeypatch.setattr(build, "check_name", lambda n: True)
+    # Stub DB connection
+    db = importlib.import_module("hap.lib.database")
+    class _C:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def cursor(self):
+            class C:
+                def __enter__(self):
+                    return self
+                def __exit__(self, *a):
+                    return False
+                def execute(self, *a, **k):
+                    pass
+                def fetchone(self):
+                    return (1,)
+                def fetchall(self):
+                    return []
+            return C()
+        def commit(self):
+            pass
+    monkeypatch.setattr(db, "auto_connect", lambda: _C())
+
+    g = tmp_path / "x.gfa"
+    g.write_text("H\tVN:Z:1.0\nS\ts0\t*\tLN:i:1\n")
+    r = CliRunner().invoke(cli, ["build", "run", str(g), "-n", "t", "-a", "c", "-c", "u", "-x", ""])
+    assert r.exit_code == 0
+    assert called["g2r"] == 1

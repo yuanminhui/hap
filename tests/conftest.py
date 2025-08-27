@@ -1,8 +1,7 @@
-import os
 import sys
 import types
-import contextlib
 from pathlib import Path
+
 import pytest
 
 # Ensure package import without installation
@@ -37,78 +36,78 @@ if "igraph" not in sys.modules:
     igraph_stub.Graph = _Graph
     sys.modules["igraph"] = igraph_stub
 
-# Stub pandas (only for type hints in imported modules; tests won't use real DataFrame ops)
-if "pandas" not in sys.modules:
-    pandas_stub = types.ModuleType("pandas")
-
-    class _DF:
-        def __init__(self, *args, **kwargs):
-            self._data = args if args else kwargs
-
-        # Provide minimal methods accessed in build.hap2db if accidentally used
-        def to_csv(self, *args, **kwargs):
-            pass
-
-        def merge(self, *args, **kwargs):
-            return self
-
-        def drop(self, *args, **kwargs):
-            return self
-
-        def explode(self, *args, **kwargs):
-            return self
-
-        def sort_values(self, *args, **kwargs):
-            return self
-
-        def astype(self, *args, **kwargs):
-            return self
-
-        def apply(self, *args, **kwargs):
-            return self
-
-        def __getitem__(self, item):
-            return self
-
-        def isin(self, *args, **kwargs):
-            return False
-
-        def itertuples(self):
-            return []
-
-    pandas_stub.DataFrame = _DF
-    sys.modules["pandas"] = pandas_stub
-
-# Stub psycopg2 (tests do not connect to real DB)
+# Stub pandas only if not installed
 try:
-    import psycopg2  # type: ignore
+    import pandas as _real_pandas  # noqa: F401
 except Exception:
-    if "psycopg2" not in sys.modules:
-        psycopg2_stub = types.ModuleType("psycopg2")
+    if "pandas" not in sys.modules:
+        pandas_stub = types.ModuleType("pandas")
 
-        class OperationalError(Exception):
-            pass
+        class _DF:
+            def __init__(self, *args, **kwargs):
+                self._data = args if args else kwargs
 
-        class Error(Exception):
-            pass
-
-        class _ext:  # extensions namespace placeholder
-            class connection:  # for type hints
+            # Provide minimal methods accessed in build.hap2db if accidentally used
+            def to_csv(self, *args, **kwargs):
                 pass
 
-        def _connect(**kwargs):
-            raise OperationalError("No real DB in tests")
+            def merge(self, *args, **kwargs):
+                return self
 
-        psycopg2_stub.OperationalError = OperationalError
-        psycopg2_stub.Error = Error
-        psycopg2_stub.connect = _connect
-        # minimal extensions submodule
-        extensions_mod = types.ModuleType("psycopg2.extensions")
-        extensions_mod.connection = _ext.connection
-        sys.modules["psycopg2"] = psycopg2_stub
-        sys.modules["psycopg2.extensions"] = extensions_mod
-        # attach attribute so `psycopg2.extensions` resolves
-        psycopg2_stub.extensions = extensions_mod
+            def drop(self, *args, **kwargs):
+                return self
+
+            def explode(self, *args, **kwargs):
+                return self
+
+            def sort_values(self, *args, **kwargs):
+                return self
+
+            def astype(self, *args, **kwargs):
+                return self
+
+            def apply(self, *args, **kwargs):
+                return self
+
+            def __getitem__(self, item):
+                return self
+
+            def isin(self, *args, **kwargs):
+                return False
+
+            def itertuples(self):
+                return []
+
+        pandas_stub.DataFrame = _DF
+        sys.modules["pandas"] = pandas_stub
+
+# Stub psycopg2 (tests do not connect to real DB)
+if "psycopg2" not in sys.modules:
+    psycopg2_stub = types.ModuleType("psycopg2")
+
+    class OperationalError(Exception):
+        pass
+
+    class Error(Exception):
+        pass
+
+    class _ext:  # extensions namespace placeholder
+        class connection:  # for type hints
+            pass
+
+    def _connect(**kwargs):
+        raise OperationalError("No real DB in tests")
+
+    psycopg2_stub.OperationalError = OperationalError
+    psycopg2_stub.Error = Error
+    psycopg2_stub.connect = _connect
+    # minimal extensions submodule
+    extensions_mod = types.ModuleType("psycopg2.extensions")
+    extensions_mod.connection = _ext.connection
+    sys.modules["psycopg2"] = psycopg2_stub
+    sys.modules["psycopg2.extensions"] = extensions_mod
+    # attach attribute so `psycopg2.extensions` resolves
+    psycopg2_stub.extensions = extensions_mod
 
 # Provide a Bio.SeqIO stub so hap.lib.sequence can import even if Biopython is absent
 if "Bio" not in sys.modules:
@@ -178,7 +177,7 @@ class FakeCursor:
             self._fetch_buffer = [(self.db.id_to_length.get(seg_id),)]
         # SELECT for get with regex
         elif "WHERE S.SEMANTIC_ID ~" in sql_up:
-            pattern = params[0]
+            params[0]
             rows = [(sid, seq) for sid, seq in self.db.sequences.items() if sid is not None]
             self._fetch_buffer = rows
         # SELECT join for get by ids
@@ -409,14 +408,18 @@ def align_db_sql_path(monkeypatch):
     import hap.lib.database as dbmod
 
     monkeypatch.setattr(dbmod, "SCRIPT_PATH_CREATE_TABLES", "create_tables.sql", raising=False)
+    # Ensure config file exists to avoid FileNotFoundError in get_connection_info
+    import hap
+    cfg_path = Path(hap.CONFIG_PATH)
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    if not cfg_path.exists():
+        cfg_path.write_text("db:\n  host: localhost\n  port: 5432\n  user: u\n  password: p\n  dbname: d\n")
 
 
 @pytest.fixture(scope="session")
 def existing_mini_example_files():
     gfa = Path("data/mini-example/mini-example.gfa")
     nodes = Path("data/mini-example/nodes.fa")
-    if not gfa.exists() or not nodes.exists():
-        pytest.skip("mini-example test data not found under data/mini-example")
     return {"gfa": gfa, "nodes": nodes}
 
 

@@ -1,0 +1,4 @@
+# file: /workspace/src/hap/lib/sequence.py
+# hypothesis_version: 6.138.2
+
+['.fastq', '.fq', 'ATCGN-', 'fasta', 'fastq']

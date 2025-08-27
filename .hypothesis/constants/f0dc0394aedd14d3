@@ -1,0 +1,4 @@
+# file: /workspace/src/hap/commands/sequence.py
+# hypothesis_version: 6.138.2
+
+['--fasta', '--format', '--regex', 'No valid IDs found.', 'fasta', 'fmt', 'id', 'ids', 'newseq', 'sequence', 'tsv']

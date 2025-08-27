@@ -1,9 +1,6 @@
-import io
-from pathlib import Path
 import builtins
-import types
-import pytest
 import sys
+import types
 
 from hap.lib import sequence as seqmod
 

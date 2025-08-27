@@ -1,0 +1,7 @@
+line-length = 100
+target-version = "py39"
+
+[lint]
+select = ["E", "F", "I"]
+ignore = []
+per-file-ignores = {"tests/**/*.py" = ["E501", "E702", "E401", "F401"], "src/hap/commands/build.py" = ["E501"], "src/hap/lib/gfa.py" = ["E501"]}

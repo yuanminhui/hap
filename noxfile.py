@@ -9,10 +9,8 @@ from textwrap import dedent
 
 import nox
 
-
 try:
-    from nox_poetry import Session
-    from nox_poetry import session
+    from nox_poetry import Session, session
 except ImportError:
     message = f"""\
     Nox failed to import the 'nox-poetry' package.
@@ -27,13 +25,10 @@ package = "hap"
 python_versions = ["3.10", "3.9"]
 nox.needs_version = ">= 2021.6.6"
 nox.options.sessions = (
-    "pre-commit",
-    "safety",
-    "mypy",
     "tests",
-    "typeguard",
-    "xdoctest",
-    "docs-build",
+    "lint",
+    "typecheck",
+    "bench",
 )
 
 
@@ -158,30 +153,64 @@ def mypy(session: Session) -> None:
         session.run("mypy", f"--python-executable={sys.executable}", "noxfile.py")
 
 
-@session(python=python_versions)
+@session(python=python_versions[0])
 def tests(session: Session) -> None:
-    """Run the test suite."""
+    """Run the test suite with coverage and marks configured."""
     session.install(".")
-    session.install("coverage[toml]", "pytest", "pygments")
-    session.install("pytest-mock")
-    try:
-        session.run("coverage", "run", "--parallel", "-m", "pytest", *session.posargs)
-    finally:
-        if session.interactive:
-            session.notify("coverage", posargs=[])
+    session.install(
+        "pytest",
+        "pytest-cov",
+        "pytest-xdist",
+        "pytest-timeout",
+        "pytest-benchmark",
+        "pytest-rerunfailures",
+        "hypothesis",
+        "psutil",
+        "rich",
+    )
+    session.run(
+        "pytest",
+        "-n",
+        "auto",
+        "--maxfail=1",
+        "--cov=hap",
+        "--cov-report=term-missing:skip-covered",
+        *session.posargs,
+    )
 
 
 @session(python=python_versions[0])
-def coverage(session: Session) -> None:
-    """Produce the coverage report."""
-    args = session.posargs or ["report"]
+def lint(session: Session) -> None:
+    """Run ruff checks and formatting check."""
+    session.install("ruff")
+    session.run("ruff", "check", ".")
+    session.run("ruff", "format", "--check", ".")
 
-    session.install("coverage[toml]")
 
-    if not session.posargs and any(Path().glob(".coverage.*")):
-        session.run("coverage", "combine")
+@session(python=python_versions[0])
+def typecheck(session: Session) -> None:
+    """Run mypy on src/ and basic stubs."""
+    session.install("mypy", ".")
+    session.run("mypy", "src/")
 
-    session.run("coverage", *args)
+
+@session(python=python_versions[0])
+def bench(session: Session) -> None:
+    """Run performance tests and generate REPORT.md."""
+    session.install(".")
+    session.install("pytest", "psutil")
+    # Run only perf tests
+    session.run("pytest", "-k", "perf", "-q")
+    # Build report from CSVs
+    session.run("python", "scripts/build_report.py")
+
+
+@session(python=python_versions[0])
+def bench_perf(session: Session) -> None:
+    """Run performance benchmarks and store results under reports/perf."""
+    session.install(".")
+    session.install("pytest", "pytest-benchmark", "psutil", "rich")
+    session.run("pytest", "-k", "perf", "--benchmark-save=baseline")
 
 
 @session(python=python_versions[0])

@@ -1,0 +1,4 @@
+# file: /workspace/src/hap/commands/config.py
+# hypothesis_version: 6.138.2
+
+['--key', '--value', 'Value to set', '__main__', 'config', 'get', 'key_to_get', 'key_to_unset', 'list', 'set', 'unset']
