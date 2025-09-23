@@ -1,0 +1,18 @@
+##gff-version 3
+chr1	sim	promoter	1	4	.	+	.	ID=promoter1;Parent=geneA
+chr1	sim	gene	5	55	.	+	.	ID=geneA;Name=GeneA;biotype=protein_coding
+chr1	sim	mRNA	5	55	.	+	.	ID=txA1;Parent=geneA
+chr1	sim	five_prime_UTR	5	9	.	+	.	Parent=txA1
+chr1	sim	exon	5	20	.	+	.	ID=ex1;Parent=txA1
+chr1	sim	CDS	10	20	.	+	0	ID=cds1;Parent=txA1
+chr1	sim	exon	30	55	.	+	.	ID=ex2;Parent=txA1
+chr1	sim	CDS	30	50	.	+	2	ID=cds2;Parent=txA1
+chr1	sim	three_prime_UTR	51	55	.	+	.	Parent=txA1
+chr1	sim	lncRNA_gene	35	70	.	-	.	ID=geneB;Name=GeneB;biotype=lncRNA
+chr1	sim	lnc_RNA	35	70	.	-	.	ID=txB1;Parent=geneB
+chr1	sim	exon	35	70	.	-	.	ID=exB1;Parent=txB1
+chr1	sim	tRNA_gene	15	18	.	+	.	ID=geneT1;product=tRNA-Phe
+chr1	sim	tRNA	15	18	.	+	.	ID=txT1;Parent=geneT1
+chr1	sim	pseudogene	70	75	.	-	.	ID=psi1;biotype=pseudogene
+chr1	RepeatMasker	repeat_region	20	25	.	+	.	ID=rep1;Name=ALU;Family=SINE/Alu
+chr1	sim	enhancer	40	48	.	+	.	ID=enh1
