@@ -233,6 +233,23 @@ def unvisited_path(
                     else:
                         next = sr
 
+def add_deletion_node(
+    graph: ig.Graph,
+    from_node: int,
+    to_node: int,
+) -> int:
+    """
+    Add a deletion node between `from_node` and `to_node`, remove original edge,
+    and return the deletion node index.
+    """
+    del_node = graph.add_vertex(get_id("s"), length=0).index
+    graph.vs[del_node]["sources"] = []
+    graph.vs[del_node]["frequency"] = 0
+
+    graph.add_edges([(from_node, del_node), (del_node, to_node)])
+    graph.delete_edges((from_node, to_node))
+
+    return del_node
 
 def process_path(
     start_node: int,
@@ -331,35 +348,28 @@ def process_path(
         visited.add(node)
         path.append(node)
         # if run across del site
-        while node in path_starts:
+        if node in path_starts:
             # find the farther predecessor
-            # other = None
             for predecessor in g.neighbors(node, mode="in"):
                 if predecessor in visited and predecessor != last:
-                    s = predecessor
+                    jump_start = predecessor
                     break
-                    # if other == None:
-                    #     other = pr
-                    #     otherspaths = g.get_all_simple_paths(pr, node)
-                    # else:
-                    #     s = pr
-                    #     for path in otherspaths:
-                    #         if pr in path:
-                    #             s = other
-                    #             break
-            if not s:
+            if not jump_start:
                 raise DataInvalidError(
                     "Unable to resolve complex graph structure. Flatten the graph and rerun."
                 )
 
-            del_node = g.add_vertex(get_id("s"), length=0).index
-            g.vs[del_node]["sources"] = []
-            g.vs[del_node]["frequency"] = 0
-            g.add_edges([(s, del_node), (del_node, node)])
-            g.delete_edges((s, node))
+            # Add deletion node between jump_start and start
+            del_node = add_deletion_node(g, jump_start, start)
+            visited.add(del_node)
+            path = [del_node]
+
+            # Insert deletion node into `path_starts` at the same position as 
+            # the original node
             ni = path_starts.index(node)
             path_starts.insert(ni, del_node)
             path_starts.remove(node)
+
         g.vs[node]["parent_segment"] = segment.id
         g.vs[node]["path"] = len(paths)
         if g.vs[node]["name"] != "head" and g.vs[node]["name"] != "tail":
@@ -409,19 +419,17 @@ def process_path(
             region.after = g.vs[af][
                 "name"
             ]  # TODO: eliminate multiple attachment relations
+            if af not in origin_path:
+                raise DataInvalidError(
+                    "Unable to resolve complex graph structure. Flatten the graph and rerun."
+                )
             a = origin_path.index(af)
             if b < a:
                 origin_allele_path = origin_path[b + 1 : a]
 
             # Build allele segment
             if not origin_allele_path:  # allele is del
-                del_node = g.add_vertex(
-                    get_id("s"), length=0
-                ).index  # NOTE: `d` node isn't added to origin path
-                g.vs[del_node]["sources"] = []
-                g.vs[del_node]["frequency"] = 0
-                g.add_edges([(before, del_node), (del_node, af)])
-                g.delete_edges((before, af))
+                del_node = add_deletion_node(g, before, af)
                 visited.add(del_node)
                 origin_allele_path = [del_node]
             if len(origin_allele_path) == 1:
@@ -1289,7 +1297,7 @@ def prepare_preprocessed_subgraph(
         awk_inject = (
             "awk -v tsv_file='" + out_tsv + "' "
             + "'BEGIN {FS=OFS=\"\\t\"; while ((getline line < tsv_file) > 0) {split(line, p, \"\\t\"); seq_len[p[1]] = length(p[2]);} close(tsv_file)} "
-            + "^S {sid=$2; if (sid in seq_len) { if (NF>=4 && $3 ~ /^[0-9]+$/) { if ($4 != \"*\") $4=\"*\" } else { if ($3 != \"*\") $3=\"*\"; if ($0 !~ /\\tLN:/) $0 = $0 \"\\tLN:i:\" seq_len[sid] } }} {print}' "
+            + "/^S/ {sid=$2; if (sid in seq_len) { if (NF>=4 && $3 ~ /^[0-9]+$/) { if ($4 != \"*\") $4=\"*\" } else { if ($3 != \"*\") $3=\"*\"; if ($0 !~ /\\tLN:/) $0 = $0 \"\\tLN:i:\" seq_len[sid] } }} {print}' "
             + working_gfa + " > " + tmp_gfa + " && mv " + tmp_gfa + " " + working_gfa
         )
         subprocess.run(awk_inject, shell=True, executable="/bin/bash")
