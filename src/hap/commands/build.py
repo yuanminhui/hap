@@ -242,6 +242,46 @@ def add_deletion_node(
     Add a deletion node between `from_node` and `to_node`, remove original edge,
     and return the deletion node index.
     """
+    # Parameter validation
+    # Check 1: `from_node` and `to_node` must be different
+    if from_node == to_node:
+        from_name = graph.vs[from_node]['name']
+        raise ValueError(
+            f"add_deletion_node: from_node == to_node ({from_name}, index={from_node}). "
+            f"Cannot create deletion node on self-loop."
+        )
+
+    # Check 2: Edge must exist
+    if not graph.are_connected(from_node, to_node):
+        from_name = graph.vs[from_node]['name']
+        to_name = graph.vs[to_node]['name']
+        raise ValueError(
+            f"add_deletion_node: Edge {from_name} (idx={from_node}) -> "
+            f"{to_name} (idx={to_node}) does not exist. "
+            f"Cannot insert deletion node on non-existent edge."
+        )
+
+    # Check 3: Protect head/tail integrity
+    # - Head should NOT be a target (to_node): head should not gain predecessors
+    # - Tail should NOT be a source (from_node): tail should not have successors
+    # - But allow: head -> del-node -> X (path starts with deletion)
+    # - And allow: X -> del-node -> tail (path ends with deletion)
+    from_name = graph.vs[from_node]['name']
+    to_name = graph.vs[to_node]['name']
+
+    if to_name == 'head':
+        raise ValueError(
+            f"add_deletion_node: Cannot add deletion node pointing TO head "
+            f"(from {from_name} -> head). Head should not gain predecessors from deletions."
+        )
+
+    if from_name == 'tail':
+        raise ValueError(
+            f"add_deletion_node: Cannot add deletion node starting FROM tail "
+            f"(from tail -> {to_name}). Tail should not have successors to deletions."
+        )
+
+    # Original implementation
     del_node = graph.add_vertex(get_id("s"), length=0).index
     graph.vs[del_node]["sources"] = []
     graph.vs[del_node]["frequency"] = 0
@@ -350,6 +390,7 @@ def process_path(
         # if run across del site
         if node in path_starts:
             # find the farther predecessor
+            jump_start = None
             for predecessor in g.neighbors(node, mode="in"):
                 if predecessor in visited and predecessor != last:
                     jump_start = predecessor
@@ -359,10 +400,9 @@ def process_path(
                     "Unable to resolve complex graph structure. Flatten the graph and rerun."
                 )
 
-            # Add deletion node between jump_start and start
-            del_node = add_deletion_node(g, jump_start, start)
+            # Add deletion node between `jump_start` and `node`
+            del_node = add_deletion_node(g, jump_start, node)
             visited.add(del_node)
-            path = [del_node]
 
             # Insert deletion node into `path_starts` at the same position as 
             # the original node
