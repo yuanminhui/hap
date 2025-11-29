@@ -1,0 +1,59 @@
+H	VN:Z:1.1
+S	s1	ATCGATCGAT	LN:i:10
+S	s2	C	LN:i:1
+S	s3	T	LN:i:1
+S	s4	G	LN:i:1
+S	s5	ACG	LN:i:3
+S	s6	AT	LN:i:2
+S	s7	AGTCTCT	LN:i:7
+S	s8	GTGACT	LN:i:6
+S	s9	CA	LN:i:2
+S	s10	TT	LN:i:2
+S	s11	ATCG	LN:i:4
+S	s12	GCTAGCTAGCTA	LN:i:12
+S	s13	CGTA	LN:i:4
+S	s14	CTGTAA	LN:i:6
+S	s15	ATCGATCG	LN:i:8
+S	s16	GCTAGCTAGC	LN:i:10
+S	s17	AAG	LN:i:3
+S	s18	GCATGCTAGCCTG	LN:i:13
+S	s19	TAGCA	LN:i:5
+S	s20	ATA	LN:i:3
+S	s21	ATAATA	LN:i:6
+S	s22	ATAATAATAATA	LN:i:12
+S	s23	GCTAGCTA	LN:i:8
+L	s1	+	s2	+	0M
+L	s1	+	s3	+	0M
+L	s1	+	s4	+	0M
+L	s2	+	s5	+	0M
+L	s3	+	s5	+	0M
+L	s4	+	s5	+	0M
+L	s5	+	s6	+	0M
+L	s5	+	s7	+	0M
+L	s6	+	s7	+	0M
+L	s7	+	s8	+	0M
+L	s7	+	s12	+	0M
+L	s8	+	s9	+	0M
+L	s8	+	s10	+	0M
+L	s9	+	s11	+	0M
+L	s10	+	s11	+	0M
+L	s11	+	s12	+	0M
+L	s12	+	s13	+	0M
+L	s12	+	s14	+	0M
+L	s13	+	s15	+	0M
+L	s14	+	s15	+	0M
+L	s15	+	s16	+	0M
+L	s15	+	s18	+	0M
+L	s16	+	s17	+	0M
+L	s16	+	s19	+	0M
+L	s17	+	s19	+	0M
+L	s18	+	s19	+	0M
+L	s19	+	s22	+	0M
+L	s19	+	s20	+	0M
+L	s19	+	s21	+	0M
+L	s20	+	s23	+	0M
+L	s21	+	s23	+	0M
+L	s22	+	s23	+	0M
+W	hap1	0	1	*	*	>s1>s2>s5>s6>s7>s8>s9>s11>s12>s13>s15>s16>s17>s19>s20>s23
+W	hap2	0	1	*	*	>s1>s3>s5>s7>s8>s10>s11>s12>s13>s15>s16>s19>s21>s23
+W	hap3	0	1	*	*	>s1>s4>s5>s7>s12>s14>s15>s18>s19>s22>s23
