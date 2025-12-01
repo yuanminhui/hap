@@ -1483,7 +1483,7 @@ def hap2db(
 
             # Add `pangenome` record
             hap_info["builder"] = f"hap v{hap.VERSION}"
-            hap_info["source_ids"] = []
+            hap_info["genome_ids"] = []
             cursor.execute(
                 "INSERT INTO pangenome (name, clade_id, description,creater, builder) VALUES (%s, %s, %s, %s, %s) RETURNING id",
                 (
@@ -1522,52 +1522,52 @@ def hap2db(
 
                 update_ids_by_subgraph(rt, st, subgraph_id, conn, sequence_file)
 
-                # Add source IDs to hap_info
-                id_map_source: dict[str, int] = {}
-                for source_name in meta["sources"]:
+                # Add genome IDs to hap_info
+                id_map_genome: dict[str, int] = {}
+                for genome_name in meta["sources"]:
                     cursor.execute(
-                        "SELECT id FROM source WHERE name = %s", (source_name,)
+                        "SELECT id FROM genome WHERE name = %s", (genome_name,)
                     )
                     result = cursor.fetchone()
                     if result is not None:
-                        source_id = result[0]
+                        genome_id = result[0]
                     else:
                         cursor.execute(
-                            "INSERT INTO source (name, clade_id) VALUES (%s, %s) RETURNING id",
-                            (source_name, clade_id),
-                        )  # Add `source` record
+                            "INSERT INTO genome (name, clade_id) VALUES (%s, %s) RETURNING id",
+                            (genome_name, clade_id),
+                        )  # Add `genome` record
                         result = cursor.fetchone()
                         if result is None:
-                            raise DatabaseError("Failed to insert source record.")
+                            raise DatabaseError("Failed to insert genome record.")
                         else:
-                            source_id = result[0]
-                    id_map_source[source_name] = source_id
-                hap_info["source_ids"] = list(
-                    set().union(hap_info["source_ids"], id_map_source.values())
+                            genome_id = result[0]
+                    id_map_genome[genome_name] = genome_id
+                hap_info["genome_ids"] = list(
+                    set().union(hap_info["genome_ids"], id_map_genome.values())
                 )
 
-                # Generate `segment_source_coordinate` table
-                segment_sources = st[["id", "sources"]].explode("sources")
-                segment_sources["sources"] = segment_sources["sources"].map(
-                    id_map_source
+                # Generate `segment_genome_coordinate` table
+                segment_genomes = st[["id", "sources"]].explode("sources")
+                segment_genomes["sources"] = segment_genomes["sources"].map(
+                    id_map_genome
                 )
-                segment_sources.rename(
-                    columns={"id": "segment_id", "sources": "source_id"}, inplace=True
+                segment_genomes.rename(
+                    columns={"id": "segment_id", "sources": "genome_id"}, inplace=True
                 )
-                segment_sources.dropna(inplace=True)
-                id_start_segment_sources = db.get_next_id_from_table(
-                    conn, "segment_source_coordinate"
+                segment_genomes.dropna(inplace=True)
+                id_start_segment_genomes = db.get_next_id_from_table(
+                    conn, "segment_genome_coordinate"
                 )
-                segment_sources.insert(
+                segment_genomes.insert(
                     0,
                     "id",
                     range(
-                        id_start_segment_sources,
-                        id_start_segment_sources + len(segment_sources),
+                        id_start_segment_genomes,
+                        id_start_segment_genomes + len(segment_genomes),
                     ),
                 )
-                segment_sources = segment_sources.astype(
-                    {"id": "uint64", "segment_id": "uint64", "source_id": "uint32"},
+                segment_genomes = segment_genomes.astype(
+                    {"id": "uint64", "segment_id": "uint64", "genome_id": "uint32"},
                     copy=False,
                 )
 
@@ -1677,7 +1677,7 @@ def hap2db(
                     tmp_segment,
                     tmp_region,
                     tmp_segment_org_id,
-                    tmp_segment_src,
+                    tmp_segment_gen,
                 ) = fileutil.create_tmp_files(4)
                 try:
                     st.to_csv(tmp_segment, sep="\t", index=False, header=False)
@@ -1685,8 +1685,8 @@ def hap2db(
                     segment_original_id.to_csv(
                         tmp_segment_org_id, sep="\t", index=False, header=False
                     )
-                    segment_sources.to_csv(
-                        tmp_segment_src, sep="\t", index=False, header=False
+                    segment_genomes.to_csv(
+                        tmp_segment_gen, sep="\t", index=False, header=False
                     )
                     with open(tmp_segment) as f:
                         cursor.copy_from(
@@ -1700,14 +1700,14 @@ def hap2db(
                         cursor.copy_from(
                             f, "segment_original_id", sep="\t", null=""
                         )  # Dump `segment_original_id` records
-                    with open(tmp_segment_src) as f:
+                    with open(tmp_segment_gen) as f:
                         cursor.copy_from(
                             f,
-                            "segment_source_coordinate",
+                            "segment_genome_coordinate",
                             sep="\t",
                             null="",
-                            columns=("id", "segment_id", "source_id"),
-                        )  # Dump `segment_source_coordinate` records
+                            columns=("id", "segment_id", "genome_id"),
+                        )  # Dump `segment_genome_coordinate` records
                     if sequence_file:
                         with open(sequence_file) as f:
                             cursor.copy_from(
@@ -1715,15 +1715,15 @@ def hap2db(
                             )  # Dump `segment_sequence` records
                 finally:
                     fileutil.remove_files(
-                        [tmp_segment, tmp_region, tmp_segment_org_id, tmp_segment_src]
+                        [tmp_segment, tmp_region, tmp_segment_org_id, tmp_segment_gen]
                     )
-            # Dump `pangenome_source` records
-            pangenome_source = [
-                (hap_id, source_id) for source_id in hap_info["source_ids"]
+            # Dump `pangenome_genome` records
+            pangenome_genome = [
+                (hap_id, genome_id) for genome_id in hap_info["genome_ids"]
             ]
             cursor.executemany(
-                "INSERT INTO pangenome_source (pangenome_id, source_id) VALUES (%s, %s)",
-                pangenome_source,
+                "INSERT INTO pangenome_genome (pangenome_id, genome_id) VALUES (%s, %s)",
+                pangenome_genome,
             )
             conn.commit()
         except Exception as e:
