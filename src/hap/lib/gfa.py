@@ -141,6 +141,110 @@ class GFA:
         elif res.returncode == 1:
             return False
 
+    def validate_path_lines(self) -> tuple[bool, list[str]]:
+        """Validate path lines exist and have correct format.
+
+        Per plan.freeze.json phase 2: Only validate path lines EXIST in GFA,
+        not segment associations. Path names in annotation files will be
+        validated at annotation import time.
+
+        Returns:
+            tuple[bool, list[str]]: (is_valid, error_messages)
+        """
+        errors: list[str] = []
+
+        if not self.contains_path():
+            errors.append("No path lines found in GFA file")
+            return False, errors
+
+        # Validate path line format based on GFA version
+        if self.version == 1.0:
+            # P lines: P <path_name> <segment_names> <overlaps>
+            with open(self.filepath, "r") as fh:
+                for line_num, line in enumerate(fh, 1):
+                    if not line.startswith("P\t"):
+                        continue
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) < 3:
+                        errors.append(
+                            f"Line {line_num}: GFA 1.0 P line requires at least 3 fields (path_name, segment_names, overlaps)"
+                        )
+                    elif not parts[1]:  # path_name empty
+                        errors.append(f"Line {line_num}: P line has empty path name")
+                    elif not parts[2]:  # segment_names empty
+                        errors.append(
+                            f"Line {line_num}: P line has empty segment names"
+                        )
+
+        elif self.version >= 2.0:
+            # O lines: O <path_name> <segment_names>
+            # U lines: U <set_name> <id_list>
+            with open(self.filepath, "r") as fh:
+                for line_num, line in enumerate(fh, 1):
+                    if line.startswith("O\t"):
+                        parts = line.rstrip("\n").split("\t")
+                        if len(parts) < 3:
+                            errors.append(
+                                f"Line {line_num}: GFA 2.0 O line requires at least 3 fields (path_name, segment_names)"
+                            )
+                        elif not parts[1]:
+                            errors.append(
+                                f"Line {line_num}: O line has empty path name"
+                            )
+                        elif not parts[2]:
+                            errors.append(
+                                f"Line {line_num}: O line has empty segment names"
+                            )
+                    elif line.startswith("U\t"):
+                        parts = line.rstrip("\n").split("\t")
+                        if len(parts) < 3:
+                            errors.append(
+                                f"Line {line_num}: GFA 2.0 U line requires at least 3 fields (set_name, id_list)"
+                            )
+                        elif not parts[1]:
+                            errors.append(
+                                f"Line {line_num}: U line has empty set name"
+                            )
+
+        else:  # GFA 1.1/1.2
+            # W lines: W <sample> <hap_index> <seq_name> <start> <end> <walk>
+            with open(self.filepath, "r") as fh:
+                for line_num, line in enumerate(fh, 1):
+                    if not line.startswith("W\t"):
+                        continue
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) < 7:
+                        errors.append(
+                            f"Line {line_num}: GFA 1.1/1.2 W line requires 7 fields (sample, hap_index, seq_name, start, end, walk, optional_fields)"
+                        )
+                    elif not parts[1]:  # sample empty
+                        errors.append(f"Line {line_num}: W line has empty sample name")
+                    elif not parts[3]:  # seq_name empty
+                        errors.append(
+                            f"Line {line_num}: W line has empty sequence name"
+                        )
+                    elif not parts[6]:  # walk empty
+                        errors.append(f"Line {line_num}: W line has empty walk")
+                    # Validate hap_index is integer
+                    try:
+                        int(parts[2])
+                    except ValueError:
+                        errors.append(
+                            f"Line {line_num}: W line hap_index '{parts[2]}' is not an integer"
+                        )
+                    # Validate start/end are integers
+                    try:
+                        int(parts[4])
+                        int(parts[5])
+                    except ValueError:
+                        errors.append(
+                            f"Line {line_num}: W line start/end coordinates must be integers"
+                        )
+
+        if errors:
+            return False, errors
+        return True, []
+
     def contains_sequence(self) -> bool:
         """Check if the GFA file contains sequence record."""
 

@@ -175,6 +175,13 @@ def validate_gfa(gfa_obj: gfa.GFA) -> ValidationResult:
         return ValidationResult(False, "The GFA file lacks length information.")
     if len(gfa_obj.get_haplotypes()) == 0:
         return ValidationResult(False, "The GFA file lacks haplotype information.")
+
+    # Validate path lines (per plan.freeze.json phase 2)
+    is_valid, errors = gfa_obj.validate_path_lines()
+    if not is_valid:
+        error_msg = "Path validation failed:\n" + "\n".join(errors)
+        return ValidationResult(False, error_msg)
+
     return ValidationResult(True, "")
 
 
