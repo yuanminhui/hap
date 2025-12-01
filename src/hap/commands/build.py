@@ -1390,6 +1390,109 @@ def build_preprocessed_subgraphs_in_parallel(
         return pool.starmap(partial_build, preprocessed_subgraphs)
 
 
+def generate_path_data(
+    gfa_filepath: str,
+    segments: pd.DataFrame,
+    id_map_genome: dict[str, int],
+    subgraph_id: int,
+    db_connection: psycopg2.extensions.connection,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Generate path and path_segment_coordinate DataFrames from GFA paths.
+
+    Per plan.freeze.json phase 3: Parse path walks, map original segment IDs
+    to internal IDs, calculate cumulative coordinates.
+
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]: (paths_df, path_seg_coords_df)
+    """
+    # Parse paths from GFA
+    gfa_obj = gfa.GFA(gfa_filepath)
+    path_info_list = gfa_obj.parse_paths()
+
+    if not path_info_list:
+        # Return empty DataFrames if no paths
+        return pd.DataFrame(), pd.DataFrame()
+
+    # Build segment_original_id → internal_id mapping
+    seg_original_to_internal = {}
+    for _, row in segments.iterrows():
+        if pd.notna(row.get("original_id")):
+            seg_original_to_internal[row["original_id"]] = row["id"]
+
+    # Build segment_id → length mapping
+    seg_id_to_length = dict(zip(segments["id"], segments["length"]))
+
+    conn = db_connection
+    id_start_path = db.get_next_id_from_table(conn, "path")
+    id_start_path_seg_coord = db.get_next_id_from_table(conn, "path_segment_coordinate")
+
+    paths_data = []
+    path_seg_coords_data = []
+    path_id = id_start_path
+    path_seg_coord_id = id_start_path_seg_coord
+
+    for path_info in path_info_list:
+        path_name = path_info["name"]
+        walk = path_info["walk"]  # list of (segment_original_id, orientation)
+        genome_name = path_info["genome_name"]
+
+        # Get genome_id
+        genome_id = id_map_genome.get(genome_name)
+        if genome_id is None:
+            # Skip paths for genomes not in this subgraph
+            continue
+
+        # Calculate path coordinates
+        cumulative_pos = 0
+        path_length = 0
+        segment_order = 0
+
+        for seg_original_id, orientation in walk:
+            # Map original segment ID to internal ID
+            internal_seg_id = seg_original_to_internal.get(seg_original_id)
+            if internal_seg_id is None:
+                # Skip segments not in segment_original_id mapping (e.g., wrappers, deletions)
+                continue
+
+            seg_length = seg_id_to_length.get(internal_seg_id, 0)
+            if seg_length == 0:
+                continue
+
+            path_start = cumulative_pos
+            path_end = cumulative_pos + seg_length
+
+            # Add path_segment_coordinate record
+            path_seg_coords_data.append({
+                "id": path_seg_coord_id,
+                "path_id": path_id,
+                "segment_id": internal_seg_id,
+                "coordinate": f"[{path_start},{path_end})",  # INT8RANGE format
+                "segment_order": segment_order,
+                "orientation": orientation,
+            })
+
+            path_seg_coord_id += 1
+            segment_order += 1
+            cumulative_pos = path_end
+            path_length = path_end
+
+        # Add path record
+        if path_length > 0:  # Only add paths with valid segments
+            paths_data.append({
+                "id": path_id,
+                "name": path_name,
+                "genome_id": genome_id,
+                "subgraph_id": subgraph_id,
+                "length": path_length,
+            })
+            path_id += 1
+
+    paths_df = pd.DataFrame(paths_data)
+    path_seg_coords_df = pd.DataFrame(path_seg_coords_data)
+
+    return paths_df, path_seg_coords_df
+
+
 def update_ids_by_subgraph(
     regions: pd.DataFrame,
     segments: pd.DataFrame,
@@ -1465,8 +1568,16 @@ def hap2db(
     hap_info: dict,
     subgraphs: list[tuple[pd.DataFrame, pd.DataFrame, dict, str | None]],
     db_connection: psycopg2.extensions.connection,
+    gfa_filepath: str = None,
 ):
-    """Dump a hierarchical pangenome to database."""
+    """Dump a hierarchical pangenome to database.
+
+    Args:
+        hap_info: HAP metadata
+        subgraphs: List of (regions, segments, meta, sequence_file) tuples
+        db_connection: Database connection
+        gfa_filepath: Path to original GFA file (for path generation)
+    """
 
     conn = db_connection
 
@@ -1584,6 +1695,31 @@ def hap2db(
                     {"id": "uint64", "original_id": "string"}, copy=False
                 )
 
+                # Generate path and path_segment_coordinate tables (per plan.freeze.json phase 3)
+                paths_df = pd.DataFrame()
+                path_seg_coords_df = pd.DataFrame()
+                if gfa_filepath:
+                    paths_df, path_seg_coords_df = generate_path_data(
+                        gfa_filepath, st, id_map_genome, subgraph_id, conn
+                    )
+                    if not paths_df.empty:
+                        paths_df = paths_df.astype({
+                            "id": "uint64",
+                            "name": "string",
+                            "genome_id": "uint32",
+                            "subgraph_id": "uint16",
+                            "length": "uint64",
+                        }, copy=False)
+                    if not path_seg_coords_df.empty:
+                        path_seg_coords_df = path_seg_coords_df.astype({
+                            "id": "uint64",
+                            "path_id": "uint64",
+                            "segment_id": "uint64",
+                            "coordinate": "string",
+                            "segment_order": "uint16",
+                            "orientation": "string",
+                        }, copy=False)
+
                 # Format `segment` table
                 st = st.merge(
                     rt[["id", "segments"]].explode("segments"),
@@ -1685,7 +1821,9 @@ def hap2db(
                     tmp_region,
                     tmp_segment_org_id,
                     tmp_segment_gen,
-                ) = fileutil.create_tmp_files(4)
+                    tmp_path,
+                    tmp_path_seg_coord,
+                ) = fileutil.create_tmp_files(6)
                 try:
                     st.to_csv(tmp_segment, sep="\t", index=False, header=False)
                     rt.to_csv(tmp_region, sep="\t", index=False, header=False)
@@ -1695,6 +1833,13 @@ def hap2db(
                     segment_genomes.to_csv(
                         tmp_segment_gen, sep="\t", index=False, header=False
                     )
+                    if not paths_df.empty:
+                        paths_df.to_csv(tmp_path, sep="\t", index=False, header=False)
+                    if not path_seg_coords_df.empty:
+                        path_seg_coords_df.to_csv(
+                            tmp_path_seg_coord, sep="\t", index=False, header=False
+                        )
+
                     with open(tmp_segment) as f:
                         cursor.copy_from(
                             f, "segment", sep="\t", null=""
@@ -1715,6 +1860,27 @@ def hap2db(
                             null="",
                             columns=("id", "segment_id", "genome_id"),
                         )  # Dump `segment_genome_coordinate` records
+
+                    # Dump path and path_segment_coordinate records (per plan.freeze.json phase 3)
+                    if not paths_df.empty:
+                        with open(tmp_path) as f:
+                            cursor.copy_from(
+                                f,
+                                "path",
+                                sep="\t",
+                                null="",
+                                columns=("id", "name", "genome_id", "subgraph_id", "length"),
+                            )  # Dump `path` records
+                    if not path_seg_coords_df.empty:
+                        with open(tmp_path_seg_coord) as f:
+                            cursor.copy_from(
+                                f,
+                                "path_segment_coordinate",
+                                sep="\t",
+                                null="",
+                                columns=("id", "path_id", "segment_id", "coordinate", "segment_order", "orientation"),
+                            )  # Dump `path_segment_coordinate` records
+
                     if sequence_file:
                         with open(sequence_file) as f:
                             cursor.copy_from(
@@ -1722,7 +1888,7 @@ def hap2db(
                             )  # Dump `segment_sequence` records
                 finally:
                     fileutil.remove_files(
-                        [tmp_segment, tmp_region, tmp_segment_org_id, tmp_segment_gen]
+                        [tmp_segment, tmp_region, tmp_segment_org_id, tmp_segment_gen, tmp_path, tmp_path_seg_coord]
                     )
             # Dump `pangenome_genome` records
             pangenome_genome = [
@@ -2027,8 +2193,10 @@ def run(
             "creater": creater,
             "description": description,
         }
+        # Get original GFA filepath for path generation
+        original_gfa = str(gfa_file) if not from_subgraphs else None
         with db.auto_connect() as conn:
-            hap2db(hap_info, sub_haps, conn)
+            hap2db(hap_info, sub_haps, conn, original_gfa)
     finally:
         if not from_subgraphs:
             shutil.rmtree(subgraph_dir)

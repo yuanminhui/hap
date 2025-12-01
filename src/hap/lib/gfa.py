@@ -245,6 +245,117 @@ class GFA:
             return False, errors
         return True, []
 
+    def parse_paths(self) -> list[dict]:
+        """Parse path information from GFA file.
+
+        Returns a list of path dictionaries with:
+        - name: path name
+        - walk: list of (segment_id, orientation) tuples
+        - genome_name: genome/sample name (for GFA 1.1/1.2 W lines)
+
+        Per plan.freeze.json phase 3: Extract path walks for coordinate generation.
+        """
+        paths = []
+
+        if self.version == 1.0:
+            # P lines: P <path_name> <segment_names> <overlaps>
+            # segment_names format: segment_id+, segment_id-, ...
+            with open(self.filepath, "r") as fh:
+                for line in fh:
+                    if not line.startswith("P\t"):
+                        continue
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) < 3:
+                        continue
+                    path_name = parts[1]
+                    segment_walk_str = parts[2]
+
+                    # Parse segment walk: e.g., "s1+,s2-,s3+"
+                    walk = []
+                    for seg in segment_walk_str.split(","):
+                        if not seg:
+                            continue
+                        orientation = seg[-1]  # + or -
+                        segment_id = seg[:-1]
+                        walk.append((segment_id, orientation))
+
+                    paths.append({
+                        "name": path_name,
+                        "walk": walk,
+                        "genome_name": path_name,  # Use path name as genome name
+                    })
+
+        elif self.version >= 2.0:
+            # O lines: O <path_name> <segment_references>
+            # segment_references format: segment_id+ segment_id- ...
+            with open(self.filepath, "r") as fh:
+                for line in fh:
+                    if not line.startswith("O\t"):
+                        continue
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) < 3:
+                        continue
+                    path_name = parts[1]
+                    segment_walk_str = parts[2]
+
+                    # Parse segment walk: e.g., "s1+ s2- s3+"
+                    walk = []
+                    for seg in segment_walk_str.split():
+                        if not seg:
+                            continue
+                        orientation = seg[-1]  # + or -
+                        segment_id = seg[:-1]
+                        walk.append((segment_id, orientation))
+
+                    paths.append({
+                        "name": path_name,
+                        "walk": walk,
+                        "genome_name": path_name,
+                    })
+
+        else:  # GFA 1.1/1.2
+            # W lines: W <sample> <hap_index> <seq_name> <start> <end> <walk>
+            # walk format: >segment_id <segment_id (> is +, < is -)
+            with open(self.filepath, "r") as fh:
+                for line in fh:
+                    if not line.startswith("W\t"):
+                        continue
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) < 7:
+                        continue
+                    sample = parts[1]
+                    hap_index = parts[2]
+                    seq_name = parts[3]
+                    walk_str = parts[6]
+
+                    # Path name: use seq_name or combine sample#hap_index#seq_name
+                    path_name = seq_name
+
+                    # Parse walk: e.g., ">s1>s2<s3"
+                    walk = []
+                    i = 0
+                    while i < len(walk_str):
+                        if walk_str[i] in (">", "<"):
+                            orientation = "+" if walk_str[i] == ">" else "-"
+                            # Find next orientation marker or end
+                            j = i + 1
+                            while j < len(walk_str) and walk_str[j] not in (">", "<"):
+                                j += 1
+                            segment_id = walk_str[i+1:j]
+                            if segment_id:
+                                walk.append((segment_id, orientation))
+                            i = j
+                        else:
+                            i += 1
+
+                    paths.append({
+                        "name": path_name,
+                        "walk": walk,
+                        "genome_name": sample,
+                    })
+
+        return paths
+
     def contains_sequence(self) -> bool:
         """Check if the GFA file contains sequence record."""
 
