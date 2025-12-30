@@ -1,0 +1,7 @@
+# BED format annotations for smp1 (0-based, half-open)
+chr1	4	45	TEST_GENE_1	.	+	4	45	0,128,0	3	11,11,11	0,15,30
+chr1	59	85	REV_GENE	.	-	59	85	128,0,0	2	11,11	0,15
+chr1	10	25	REGULATORY_1	.	+
+chr1	50	58	ENHANCER_1	.	+
+chr1	30	33	REPEAT_1	.	+
+chr1	70	73	REPEAT_2	.	-

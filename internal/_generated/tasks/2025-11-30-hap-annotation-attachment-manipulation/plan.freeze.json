@@ -1,0 +1,571 @@
+{
+  "task_id": "hap-annotation-attachment-manipulation",
+  "created_date": "2025-11-30",
+  "status": "frozen",
+  "frozen_at": "2025-11-30T22:31:19Z",
+  "components": [
+    {
+      "name": "database_schema",
+      "type": "schema",
+      "files": ["src/sql/create_tables.sql"],
+      "description": "Complete database schema for annotations and paths"
+    },
+    {
+      "name": "annotation_library",
+      "type": "library",
+      "files": ["src/hap/lib/annotation.py"],
+      "description": "OPTIONAL: Shared parsing utilities only (if needed)",
+      "optional": true
+    },
+    {
+      "name": "gfa_path_validation",
+      "type": "library",
+      "files": ["src/hap/lib/gfa.py"],
+      "description": "GFA path validation and parsing for all versions"
+    },
+    {
+      "name": "build_command_extension",
+      "type": "command",
+      "files": ["src/hap/commands/build.py"],
+      "description": "Add --annotations parameter and path processing"
+    },
+    {
+      "name": "annotation_command",
+      "type": "command",
+      "files": ["src/hap/commands/annotation.py"],
+      "description": "PRIMARY implementation: Full CRUD operations for annotations"
+    },
+    {
+      "name": "data_elements",
+      "type": "library",
+      "files": ["src/hap/lib/elements.py"],
+      "description": "NO CHANGE: Do not add Path/Annotation classes unless necessary",
+      "action": "skip_unless_necessary"
+    },
+    {
+      "name": "test_data",
+      "type": "data",
+      "files": [
+        "data/mini-example/new-mini-example.annotations.gff3",
+        "data/mini-example/new-mini-example.annotations.gtf",
+        "data/mini-example/new-mini-example.annotations.bed"
+      ],
+      "description": "Mock annotation data for testing"
+    }
+  ],
+  "database_schema_changes": [
+    {
+      "action": "rename_table",
+      "from": "source",
+      "to": "genome",
+      "affected_tables": ["pangenome_source", "segment_source_coordinate"],
+      "affected_columns": [
+        "pangenome_source.source_id → genome_id",
+        "segment_source_coordinate.source_id → genome_id"
+      ]
+    },
+    {
+      "action": "create_table",
+      "table": "path",
+      "columns": [
+        {"name": "id", "type": "BIGINT", "constraints": "PRIMARY KEY"},
+        {"name": "name", "type": "VARCHAR(50)", "constraints": "NOT NULL"},
+        {"name": "genome_id", "type": "INTEGER", "constraints": "NOT NULL REFERENCES genome(id)"},
+        {"name": "subgraph_id", "type": "SMALLINT", "constraints": "NOT NULL REFERENCES subgraph(id) ON DELETE CASCADE"},
+        {"name": "length", "type": "BIGINT", "constraints": "NOT NULL CHECK(length >= 0)"}
+      ],
+      "indexes": [
+        {"name": "path_genome_idx", "columns": ["genome_id"]},
+        {"name": "path_subgraph_idx", "columns": ["subgraph_id"]}
+      ]
+    },
+    {
+      "action": "create_table",
+      "table": "path_segment_coordinate",
+      "columns": [
+        {"name": "id", "type": "BIGINT", "constraints": "PRIMARY KEY"},
+        {"name": "path_id", "type": "BIGINT", "constraints": "NOT NULL REFERENCES path(id) ON DELETE CASCADE"},
+        {"name": "segment_id", "type": "BIGINT", "constraints": "NOT NULL REFERENCES segment(id) ON DELETE CASCADE"},
+        {"name": "coordinate", "type": "INT8RANGE", "constraints": "NOT NULL"},
+        {"name": "segment_order", "type": "SMALLINT", "constraints": "NOT NULL CHECK(segment_order >= 0)"},
+        {"name": "orientation", "type": "CHAR(1)", "constraints": "NOT NULL CHECK(orientation IN ('+', '-'))"}
+      ],
+      "indexes": [
+        {"name": "path_seg_coord_path_idx", "columns": ["path_id", "segment_order"]},
+        {"name": "path_seg_coord_segment_idx", "columns": ["segment_id"]},
+        {"name": "path_seg_coord_coordinate_idx", "type": "GIST", "columns": ["coordinate"]}
+      ]
+    },
+    {
+      "action": "alter_table",
+      "table": "annotation",
+      "changes": [
+        {"action": "drop_column", "column": "semantic_id"},
+        {"action": "drop_column", "column": "level_range"},
+        {"action": "drop_column", "column": "coordinate"},
+        {"action": "drop_column", "column": "type"},
+        {"action": "drop_column", "column": "length"},
+        {"action": "drop_column", "column": "subgraph_id"},
+        {"action": "add_column", "column": {"name": "subgraph_id", "type": "SMALLINT", "constraints": "NOT NULL REFERENCES subgraph(id) ON DELETE CASCADE"}},
+        {"action": "add_column", "column": {"name": "path_id", "type": "BIGINT", "constraints": "NOT NULL REFERENCES path(id) ON DELETE CASCADE"}},
+        {"action": "add_column", "column": {"name": "coordinate", "type": "INT8RANGE", "constraints": "NOT NULL"}},
+        {"action": "add_column", "column": {"name": "type", "type": "VARCHAR(50)", "constraints": "NOT NULL"}},
+        {"action": "add_column", "column": {"name": "label", "type": "VARCHAR(200)"}},
+        {"action": "add_column", "column": {"name": "strand", "type": "CHAR(1)", "constraints": "CHECK(strand IN ('+', '-', '.'))", "default": "."}},
+        {"action": "add_column", "column": {"name": "attributes", "type": "JSONB"}},
+        {"action": "add_column", "column": {"name": "genome_id", "type": "INTEGER", "constraints": "REFERENCES genome(id)"}},
+        {"action": "add_column", "column": {"name": "created_at", "type": "TIMESTAMP", "constraints": "DEFAULT NOW()"}}
+      ],
+      "note": "Core fields: subgraph_id, path_id, coordinate (INT8RANGE on path), type, label, strand, attributes (JSONB), genome_id, created_at. Segment-level positioning in annotation_span.",
+      "indexes": [
+        {"name": "annotation_subgraph_idx", "columns": ["subgraph_id"]},
+        {"name": "annotation_path_idx", "columns": ["path_id"]},
+        {"name": "annotation_coordinate_idx", "type": "GIST", "columns": ["coordinate"]},
+        {"name": "annotation_type_idx", "columns": ["type"]},
+        {"name": "annotation_genome_idx", "columns": ["genome_id"]},
+        {"name": "annotation_attrs_gin_idx", "type": "GIN", "columns": ["attributes"]}
+      ]
+    },
+    {
+      "action": "create_table",
+      "table": "annotation_gene",
+      "columns": [
+        {"name": "annotation_id", "type": "BIGINT", "constraints": "PRIMARY KEY REFERENCES annotation(id) ON DELETE CASCADE"},
+        {"name": "gene_id", "type": "VARCHAR(50)"},
+        {"name": "transcript_id", "type": "VARCHAR(50)"},
+        {"name": "biotype", "type": "VARCHAR(50)"},
+        {"name": "phase", "type": "SMALLINT", "constraints": "CHECK(phase IN (0, 1, 2))"},
+        {"name": "parent", "type": "VARCHAR(100)"}
+      ],
+      "indexes": [
+        {"name": "annotation_gene_gene_id_idx", "columns": ["gene_id"]},
+        {"name": "annotation_gene_transcript_id_idx", "columns": ["transcript_id"]}
+      ]
+    },
+    {
+      "action": "create_table",
+      "table": "annotation_repeat",
+      "columns": [
+        {"name": "annotation_id", "type": "BIGINT", "constraints": "PRIMARY KEY REFERENCES annotation(id) ON DELETE CASCADE"},
+        {"name": "repeat_class", "type": "VARCHAR(50)"},
+        {"name": "family", "type": "VARCHAR(50)"},
+        {"name": "subfamily", "type": "VARCHAR(50)"}
+      ]
+    },
+    {
+      "action": "create_table",
+      "table": "annotation_regulatory",
+      "columns": [
+        {"name": "annotation_id", "type": "BIGINT", "constraints": "PRIMARY KEY REFERENCES annotation(id) ON DELETE CASCADE"},
+        {"name": "regulatory_class", "type": "VARCHAR(50)"},
+        {"name": "bound_moiety", "type": "VARCHAR(100)"}
+      ]
+    },
+    {
+      "action": "create_table",
+      "table": "annotation_variant",
+      "columns": [
+        {"name": "annotation_id", "type": "BIGINT", "constraints": "PRIMARY KEY REFERENCES annotation(id) ON DELETE CASCADE"},
+        {"name": "ref_allele", "type": "TEXT"},
+        {"name": "alt_allele", "type": "TEXT"},
+        {"name": "variant_type", "type": "VARCHAR(20)"}
+      ]
+    },
+    {
+      "action": "create_table",
+      "table": "annotation_span",
+      "columns": [
+        {"name": "id", "type": "BIGINT", "constraints": "PRIMARY KEY"},
+        {"name": "annotation_id", "type": "BIGINT", "constraints": "NOT NULL REFERENCES annotation(id) ON DELETE CASCADE"},
+        {"name": "segment_id", "type": "BIGINT", "constraints": "NOT NULL REFERENCES segment(id) ON DELETE CASCADE"},
+        {"name": "coordinate", "type": "INT4RANGE", "constraints": "NOT NULL"},
+        {"name": "span_order", "type": "SMALLINT", "constraints": "NOT NULL CHECK(span_order >= 0)"}
+      ],
+      "note": "Generated for ALL annotations (single-segment and multi-segment). Coordinate is INT4RANGE (0-based) on segment.",
+      "indexes": [
+        {"name": "annotation_span_annotation_idx", "columns": ["annotation_id", "span_order"]},
+        {"name": "annotation_span_segment_idx", "columns": ["segment_id"]},
+        {"name": "annotation_span_coordinate_idx", "type": "GIST", "columns": ["coordinate"]}
+      ]
+    },
+    {
+      "action": "alter_table",
+      "table": "path",
+      "changes": [
+        {"action": "add_constraint", "constraint": "UNIQUE(subgraph_id, name)"}
+      ],
+      "note": "Path names unique per subgraph (at minimum)"
+    },
+    {
+      "action": "drop_table",
+      "table": "segment_annotation_coordinate",
+      "reason": "Replaced by annotation_span with better design"
+    }
+  ],
+  "new_commands": [
+    {
+      "command": "hap annotation add",
+      "file": "src/hap/commands/annotation.py",
+      "function": "add",
+      "parameters": [
+        {"name": "--hap", "type": "str", "required": false, "help": "Target HAP name"},
+        {"name": "--path", "type": "str", "required": false, "help": "Target path/genome name"},
+        {"name": "--subgraph", "type": "str", "required": false, "help": "Target subgraph name"},
+        {"name": "--file", "type": "Path", "required": true, "help": "Annotation file to import"},
+        {"name": "--format", "type": "choice", "choices": ["gff3", "gtf", "bed", "auto"], "default": "auto", "help": "Annotation file format"}
+      ],
+      "description": "Import annotations from file into database",
+      "validation": "Exactly one of --hap, --path, or --subgraph must be specified"
+    },
+    {
+      "command": "hap annotation get",
+      "file": "src/hap/commands/annotation.py",
+      "function": "get",
+      "parameters": [
+        {"name": "--id", "type": "int", "multiple": true, "help": "Annotation ID(s)"},
+        {"name": "--label", "type": "str", "help": "Annotation label (regex pattern)"},
+        {"name": "--type", "type": "str", "help": "Annotation type (gene, repeat, regulatory, variant, etc.)"},
+        {"name": "--segment", "type": "str", "help": "Segment ID or semantic_id"},
+        {"name": "--path", "type": "str", "help": "Path/genome name"},
+        {"name": "--hap", "type": "str", "help": "HAP name"},
+        {"name": "--subgraph", "type": "str", "help": "Subgraph name"},
+        {"name": "--range", "type": "str", "help": "Coordinate range on path (format: start-end, 0-based, uses coordinate INT8RANGE overlap)"},
+        {"name": "--format", "type": "choice", "choices": ["tsv", "gff3", "gtf", "bed", "json"], "default": "tsv", "help": "Output format (GFF3/GTF converted to 1-based)"},
+        {"name": "--output", "type": "Path", "help": "Output file (default: stdout)"}
+      ],
+      "note": "Removed --level and --strand filters; --name renamed to --label",
+      "description": "Query annotations with filters"
+    },
+    {
+      "command": "hap annotation edit",
+      "file": "src/hap/commands/annotation.py",
+      "function": "edit",
+      "parameters": [
+        {"name": "--id", "type": "int", "required": true, "help": "Annotation ID to edit"},
+        {"name": "--label", "type": "str", "help": "New label"},
+        {"name": "--type", "type": "str", "help": "New type"}
+      ],
+      "description": "Edit annotation properties"
+    },
+    {
+      "command": "hap annotation delete",
+      "file": "src/hap/commands/annotation.py",
+      "function": "delete",
+      "parameters": [
+        {"name": "--id", "type": "int", "multiple": true, "help": "Annotation ID(s) to delete"},
+        {"name": "--label", "type": "str", "help": "Delete by label pattern (regex)"},
+        {"name": "--type", "type": "str", "help": "Delete by type"},
+        {"name": "--hap", "type": "str", "help": "Delete from HAP"},
+        {"name": "--confirm", "is_flag": true, "help": "Confirm deletion without prompt"}
+      ],
+      "description": "Delete annotations by filter",
+      "validation": "Requires confirmation if more than 1 annotation matches"
+    },
+    {
+      "command": "hap annotation export",
+      "file": "src/hap/commands/annotation.py",
+      "function": "export",
+      "parameters": [
+        {"name": "--hap", "type": "str", "help": "HAP name to export from"},
+        {"name": "--path", "type": "str", "help": "Path/genome name to export from"},
+        {"name": "--format", "type": "choice", "choices": ["gff3", "gtf", "bed"], "required": true, "help": "Export format"},
+        {"name": "--output", "type": "Path", "required": true, "help": "Output file"}
+      ],
+      "description": "Export annotations to file"
+    }
+  ],
+  "modified_commands": [
+    {
+      "command": "hap build run",
+      "file": "src/hap/commands/build.py",
+      "function": "run",
+      "new_parameters": [
+        {
+          "name": "--annotations",
+          "type": "Path",
+          "multiple": true,
+          "help": "Annotation files to import (GFF3/GTF/BED)",
+          "position": "after --sequence-file"
+        }
+      ],
+      "changes": [
+        "Add GFA path line existence validation (not segment associations)",
+        "Generate path and path_segment_coordinate during graph2rstree()",
+        "Import annotations after hap2db() if --annotations provided",
+        "Validate annotation file path names exist in target HAP",
+        "Convert GFF3/GTF coordinates from 1-based to 0-based"
+      ]
+    }
+  ],
+  "new_modules": [
+    {
+      "name": "annotation",
+      "file": "src/hap/lib/annotation.py",
+      "classes": [
+        {
+          "name": "Annotation",
+          "description": "Data class for annotation records",
+          "attributes": ["id", "name", "type", "path_id", "path_start", "path_end", "strand", "source", "score", "phase", "format_attributes"]
+        },
+        {
+          "name": "AnnotationSpan",
+          "description": "Data class for annotation-segment relationship",
+          "attributes": ["id", "annotation_id", "segment_id", "segment_start", "segment_end", "span_order"]
+        },
+        {
+          "name": "GFF3Parser",
+          "description": "Parser for GFF3 format",
+          "methods": ["parse", "parse_attributes", "validate"]
+        },
+        {
+          "name": "GTFParser",
+          "description": "Parser for GTF format",
+          "methods": ["parse", "parse_attributes", "validate"]
+        },
+        {
+          "name": "BEDParser",
+          "description": "Parser for BED format (BED3-BED12)",
+          "methods": ["parse", "detect_columns", "validate"]
+        },
+        {
+          "name": "AnnotationMapper",
+          "description": "Maps annotations to segments via path coordinates",
+          "methods": ["map_annotation_to_segments", "query_path_segment_coordinates", "calculate_segment_coordinates", "generate_annotation_spans"]
+        },
+        {
+          "name": "AnnotationImporter",
+          "description": "Imports annotations into database",
+          "methods": ["import_file", "import_annotations", "validate_target", "bulk_insert"]
+        },
+        {
+          "name": "AnnotationExporter",
+          "description": "Exports annotations from database",
+          "methods": ["export_to_gff3", "export_to_gtf", "export_to_bed", "query_annotations"]
+        }
+      ],
+      "functions": [
+        {
+          "name": "detect_annotation_format",
+          "parameters": ["filepath: str"],
+          "returns": "str",
+          "description": "Auto-detect annotation file format"
+        },
+        {
+          "name": "parse_annotation_file",
+          "parameters": ["filepath: str", "format: str = 'auto'"],
+          "returns": "List[Annotation]",
+          "description": "Parse annotation file and return list of annotations"
+        },
+        {
+          "name": "import_annotations",
+          "parameters": ["conn: psycopg2.connection", "filepath: str", "hap_name: str = None", "path_name: str = None", "format: str = 'auto'"],
+          "returns": "Dict[str, int]",
+          "description": "Import annotations from file into database"
+        },
+        {
+          "name": "query_annotations",
+          "parameters": ["conn: psycopg2.connection", "filters: Dict[str, Any]"],
+          "returns": "List[Annotation]",
+          "description": "Query annotations with filters"
+        },
+        {
+          "name": "delete_annotations",
+          "parameters": ["conn: psycopg2.connection", "filters: Dict[str, Any]"],
+          "returns": "int",
+          "description": "Delete annotations matching filters, return count"
+        }
+      ]
+    }
+  ],
+  "test_data_requirements": [
+    {
+      "file": "data/mini-example/new-mini-example.annotations.gff3",
+      "format": "GFF3",
+      "content": [
+        "Genes spanning single and multiple segments",
+        "CDS features with phase information",
+        "Exons and introns",
+        "mRNA transcripts",
+        "UTR regions",
+        "Both + and - strands",
+        "Parent-child relationships (gene → mRNA → exon/CDS)",
+        "Annotations referencing all 3 paths (hap1, hap2, hap3)"
+      ]
+    },
+    {
+      "file": "data/mini-example/new-mini-example.annotations.gtf",
+      "format": "GTF",
+      "content": [
+        "Gene features with gene_id and gene_name",
+        "Transcript features with transcript_id",
+        "Exon features",
+        "CDS features with frame",
+        "Start/stop codons",
+        "Cover all 3 haplotypes"
+      ]
+    },
+    {
+      "file": "data/mini-example/new-mini-example.annotations.bed",
+      "format": "BED",
+      "content": [
+        "BED3: Simple intervals (e.g., repeats)",
+        "BED6: Named features with score and strand",
+        "BED12: Complex features with blocks (e.g., genes with exons)",
+        "Various feature types (regulatory regions, repeats, conserved elements)"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "module": "psycopg2",
+      "version": "existing",
+      "purpose": "Database operations"
+    },
+    {
+      "module": "click",
+      "version": "existing",
+      "purpose": "CLI framework"
+    },
+    {
+      "module": "pandas",
+      "version": "existing",
+      "purpose": "Data manipulation (if used in annotation processing)"
+    }
+  ],
+  "file_paths": {
+    "sql_schema": "src/sql/create_tables.sql",
+    "migration_script": "src/sql/migrate_source_to_genome.sql",
+    "annotation_lib": "src/hap/lib/annotation.py",
+    "gfa_lib": "src/hap/lib/gfa.py",
+    "database_lib": "src/hap/lib/database.py",
+    "elements_lib": "src/hap/lib/elements.py",
+    "build_command": "src/hap/commands/build.py",
+    "annotation_command": "src/hap/commands/annotation.py",
+    "test_gff3": "data/mini-example/new-mini-example.annotations.gff3",
+    "test_gtf": "data/mini-example/new-mini-example.annotations.gtf",
+    "test_bed": "data/mini-example/new-mini-example.annotations.bed"
+  },
+  "implementation_checklist": [
+    {
+      "phase": "1-database-schema",
+      "tasks": [
+        "Design annotation table: subgraph_id, path_id, coordinate (INT8RANGE), type, label, strand, attributes (JSONB), genome_id, created_at",
+        "Design type-specific tables: annotation_gene, annotation_repeat, annotation_regulatory, annotation_variant",
+        "Update src/sql/create_tables.sql directly (no drop/create migration)",
+        "Create Python code update script for source→genome rename (grep all .py files)",
+        "Add UNIQUE constraint: path(subgraph_id, name)",
+        "Update src/hap/lib/database.py for new schema"
+      ]
+    },
+    {
+      "phase": "2-path-validation",
+      "tasks": [
+        "Implement GFA path line existence validation (all versions: 1.0 P, 1.1/1.2 W, 2.0 O/U)",
+        "Do NOT validate segment associations at build time",
+        "Add path name validation for annotation imports (check path exists in HAP)",
+        "Add path parsing methods to src/hap/lib/gfa.py",
+        "Integrate validation into build.py validate_gfa()",
+        "Implement parse_paths() to extract path information",
+        "Add unit tests for each GFA version"
+      ]
+    },
+    {
+      "phase": "3-path-coordinate-generation",
+      "tasks": [
+        "Implement generate_path_segment_coordinates() in build.py",
+        "Parse path walks (e.g., >s1>s2<s3)",
+        "Map original segment IDs to internal IDs",
+        "Calculate cumulative coordinates along paths",
+        "Insert path and path_segment_coordinate records",
+        "Test with new-mini-example.gfa (3 paths)"
+      ]
+    },
+    {
+      "phase": "4-annotation-parsing",
+      "tasks": [
+        "Create src/hap/commands/annotation.py as primary implementation",
+        "Optionally create src/hap/lib/annotation.py for shared utilities only",
+        "Implement GFF3Parser.parse() with 1-based → 0-based coordinate conversion",
+        "Implement GTFParser.parse() with 1-based → 0-based coordinate conversion",
+        "Implement BEDParser.parse() (already 0-based, no conversion needed)",
+        "Do NOT create Path/Annotation data classes unless necessary",
+        "Add detect_annotation_format() for auto-detection",
+        "Add comprehensive unit tests for coordinate conversion"
+      ]
+    },
+    {
+      "phase": "5-coordinate-mapping",
+      "tasks": [
+        "Implement coordinate mapping: annotation (path-based) → segment-based (via path_segment_coordinate)",
+        "Generate annotation_span records for ALL annotations (single and multi-segment)",
+        "Use batch ID pre-generation pattern: get_next_id_from_table() + range()",
+        "Calculate segment-local coordinates (0-based)",
+        "Handle reverse strand orientation",
+        "Verify segment_original_id exists for normal segments (wrapper/deletion excluded)",
+        "Add unit tests for coordinate mapping edge cases"
+      ]
+    },
+    {
+      "phase": "6-annotation-import",
+      "tasks": [
+        "Implement AnnotationImporter.validate_target() (check hap/path exists)",
+        "Implement AnnotationImporter.import_file() orchestration",
+        "Implement AnnotationImporter.bulk_insert() for performance",
+        "Add --annotations parameter to build command",
+        "Implement annotation import in build workflow",
+        "Create annotation add subcommand",
+        "Add validation for annotation coordinates vs path length",
+        "Add error handling and progress reporting"
+      ]
+    },
+    {
+      "phase": "7-annotation-query",
+      "tasks": [
+        "Implement annotation get command with filters",
+        "Build SQL query with JOINs (annotation ← annotation_span → segment → path)",
+        "Implement filter by id, label (regex), type, segment, path, hap, subgraph, range",
+        "Remove level and strand from query filters",
+        "Implement output formatting (TSV, GFF3, GTF, BED, JSON)",
+        "Convert 0-based → 1-based for GFF3/GTF export",
+        "Test query performance with indexes"
+      ]
+    },
+    {
+      "phase": "8-annotation-crud",
+      "tasks": [
+        "Implement annotation edit command",
+        "Implement annotation delete command with confirmation",
+        "Implement annotation export command",
+        "Add AnnotationExporter.export_to_gff3/gtf/bed()",
+        "Ensure referential integrity on deletes (CASCADE)",
+        "Test round-trip import/export consistency"
+      ]
+    },
+    {
+      "phase": "9-test-data",
+      "tasks": [
+        "Analyze new-mini-example.gfa path structure (3 paths, 23 segments)",
+        "Design annotation coverage strategy",
+        "Create GFF3 file with genes, mRNAs, exons, CDSs (multi-level hierarchy)",
+        "Create GTF file with genes, transcripts, exons, CDSs",
+        "Create BED file with BED3, BED6, BED12 examples",
+        "Include annotations spanning segments (e.g., s1-s2-s5 in hap1)",
+        "Include both strands (+/-)",
+        "Validate test data with import/export round-trip"
+      ]
+    },
+    {
+      "phase": "10-integration-testing",
+      "tasks": [
+        "Test build with --annotations (import during build)",
+        "Test annotation add (post-build import)",
+        "Test complex queries (range overlap, regex, multi-filter)",
+        "Test annotation edit and delete",
+        "Test export to all formats",
+        "Test with all GFA versions if possible",
+        "Performance test with larger annotation files",
+        "Update documentation with examples"
+      ]
+    }
+  ]
+}

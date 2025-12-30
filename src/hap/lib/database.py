@@ -230,6 +230,40 @@ def get_next_id_from_table(
         return max_id + 1 if max_id else 1
 
 
+def copy_from_df(
+    connection: psycopg2.extensions.connection,
+    df,
+    table_name: str,
+    columns: list[str] = None,
+):
+    """
+    Bulk copy DataFrame to database using COPY (high performance).
+
+    Args:
+        connection: A psycopg2 connection object
+        df: pandas DataFrame
+        table_name: Target table name
+        columns: Optional list of column names (default: all DataFrame columns)
+
+    Raises:
+        psycopg2.Error: If copy operation fails
+    """
+    import io
+
+    # Use DataFrame columns if not specified
+    if columns is None:
+        columns = df.columns.tolist()
+
+    # Create CSV buffer
+    buffer = io.StringIO()
+    df[columns].to_csv(buffer, sep='\t', index=False, header=False, na_rep='\\N')
+    buffer.seek(0)
+
+    # Execute COPY
+    with connection.cursor() as cursor:
+        cursor.copy_from(buffer, table_name, sep='\t', null='\\N', columns=columns)
+
+
 # # DEBUG
 # if __name__ == "__main__":
 #     os.environ["HAP_DB_HOST"] = "env_host"

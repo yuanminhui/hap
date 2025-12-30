@@ -141,6 +141,227 @@ class GFA:
         elif res.returncode == 1:
             return False
 
+    def validate_path_lines(self) -> tuple[bool, list[str]]:
+        """Validate path lines exist and have correct format.
+
+        Per plan.freeze.json phase 2: Only validate path lines EXIST in GFA,
+        not segment associations. Path names in annotation files will be
+        validated at annotation import time.
+
+        Returns:
+            tuple[bool, list[str]]: (is_valid, error_messages)
+        """
+        errors: list[str] = []
+
+        if not self.contains_path():
+            errors.append("No path lines found in GFA file")
+            return False, errors
+
+        # Validate path line format based on GFA version
+        if self.version == 1.0:
+            # P lines: P <path_name> <segment_names> <overlaps>
+            with open(self.filepath, "r") as fh:
+                for line_num, line in enumerate(fh, 1):
+                    if not line.startswith("P\t"):
+                        continue
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) < 3:
+                        errors.append(
+                            f"Line {line_num}: GFA 1.0 P line requires at least 3 fields (path_name, segment_names, overlaps)"
+                        )
+                    elif not parts[1]:  # path_name empty
+                        errors.append(f"Line {line_num}: P line has empty path name")
+                    elif not parts[2]:  # segment_names empty
+                        errors.append(
+                            f"Line {line_num}: P line has empty segment names"
+                        )
+
+        elif self.version >= 2.0:
+            # O lines: O <path_name> <segment_names>
+            # U lines: U <set_name> <id_list>
+            with open(self.filepath, "r") as fh:
+                for line_num, line in enumerate(fh, 1):
+                    if line.startswith("O\t"):
+                        parts = line.rstrip("\n").split("\t")
+                        if len(parts) < 3:
+                            errors.append(
+                                f"Line {line_num}: GFA 2.0 O line requires at least 3 fields (path_name, segment_names)"
+                            )
+                        elif not parts[1]:
+                            errors.append(
+                                f"Line {line_num}: O line has empty path name"
+                            )
+                        elif not parts[2]:
+                            errors.append(
+                                f"Line {line_num}: O line has empty segment names"
+                            )
+                    elif line.startswith("U\t"):
+                        parts = line.rstrip("\n").split("\t")
+                        if len(parts) < 3:
+                            errors.append(
+                                f"Line {line_num}: GFA 2.0 U line requires at least 3 fields (set_name, id_list)"
+                            )
+                        elif not parts[1]:
+                            errors.append(
+                                f"Line {line_num}: U line has empty set name"
+                            )
+
+        else:  # GFA 1.1/1.2
+            # W lines: W <sample> <hap_index> <seq_name> <start> <end> <walk>
+            with open(self.filepath, "r") as fh:
+                for line_num, line in enumerate(fh, 1):
+                    if not line.startswith("W\t"):
+                        continue
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) < 7:
+                        errors.append(
+                            f"Line {line_num}: GFA 1.1/1.2 W line requires 7 fields (sample, hap_index, seq_name, start, end, walk, optional_fields)"
+                        )
+                    elif not parts[1]:  # sample empty
+                        errors.append(f"Line {line_num}: W line has empty sample name")
+                    elif not parts[3]:  # seq_name empty
+                        errors.append(
+                            f"Line {line_num}: W line has empty sequence name"
+                        )
+                    elif not parts[6]:  # walk empty
+                        errors.append(f"Line {line_num}: W line has empty walk")
+                    # Validate hap_index is integer
+                    try:
+                        int(parts[2])
+                    except ValueError:
+                        errors.append(
+                            f"Line {line_num}: W line hap_index '{parts[2]}' is not an integer"
+                        )
+                    # Validate start/end are integers or '*' (wildcard for entire sequence)
+                    if parts[4] != "*":
+                        try:
+                            int(parts[4])
+                        except ValueError:
+                            errors.append(
+                                f"Line {line_num}: W line start coordinate must be integer or '*'"
+                            )
+                    if parts[5] != "*":
+                        try:
+                            int(parts[5])
+                        except ValueError:
+                            errors.append(
+                                f"Line {line_num}: W line end coordinate must be integer or '*'"
+                            )
+
+        if errors:
+            return False, errors
+        return True, []
+
+    def parse_paths(self, path_genome_map: dict[str, str] = None) -> list[dict]:
+        """Parse path information from GFA file using AWK for efficiency.
+
+        Scans P, O, and W lines in a single pass. AWK script performs:
+        - Forward-only orientation validation (rejects '-' orientations)
+        - Walk normalization to space-separated segment IDs
+        - Genome name resolution via PanSN/delimiter conventions
+        - Empty path name handling
+
+        Args:
+            path_genome_map: Optional explicit mapping from path_name to genome_name.
+                Overrides convention-based parsing for matched paths.
+
+        Returns:
+            list[dict]: List of path dictionaries with keys:
+                - name: path name (str)
+                - walk: list of segment_id strings (all forward orientation)
+                - genome_name: genome/sample name (str)
+
+        Raises:
+            DataInvalidError: If no paths found, genome resolution fails,
+                or any path contains reverse orientation.
+
+        Per plan.freeze.json phase 3: Extract path walks for coordinate generation.
+        """
+
+        if not self.contains_path():
+            raise DataInvalidError(
+                f"No path lines found in GFA file '{self.filepath}'. "
+                "Paths are required for building the pangenome."
+            )
+
+        # Run AWK script to extract and validate paths
+        awk_script_func = os.path.join(
+            hap.SOURCE_ROOT, "awk", "gfa", "parse_pansn_str.awk"
+        )
+        awk_script_paths = os.path.join(
+            hap.SOURCE_ROOT, "awk", "gfa", "parse_gfa_paths.awk"
+        )
+
+        cmd = ["awk", "-f", awk_script_func, "-f", awk_script_paths, self.filepath]
+        res = subprocess.run(cmd, text=True, capture_output=True)
+
+        # Check for AWK script errors (orientation validation, etc.)
+        if res.returncode != 0:
+            raise DataInvalidError(
+                f"Path validation failed:\n{res.stderr.strip()}"
+            )
+
+        if not res.stdout.strip():
+            raise DataInvalidError(
+                f"No paths found in GFA file '{self.filepath}'. "
+                "Paths are required for building the pangenome."
+            )
+
+        # Parse AWK output (format: path_name\tgenome_name\tnormalized_walk)
+        paths = []
+        errors = []
+
+        for line in res.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+
+            path_name, genome_name, normalized_walk = parts[0], parts[1], parts[2]
+
+            # Apply explicit mapping if provided (overrides convention parsing)
+            if path_genome_map is not None:
+                if path_name in path_genome_map:
+                    genome_name = path_genome_map[path_name]
+                else:
+                    errors.append(
+                        f"Path '{path_name}' not found in provided path_genome_map. "
+                        "All paths must be explicitly mapped when path_genome_map is provided."
+                    )
+                    continue
+
+            # Check for genome resolution errors from AWK
+            if genome_name.startswith("ERROR:"):
+                if genome_name == "ERROR:EMPTY":
+                    errors.append(f"Path '{path_name}' has empty name in GFA file.")
+                else:
+                    orig_path = genome_name[6:]  # Remove "ERROR:" prefix
+                    errors.append(
+                        f"Cannot resolve genome name for path '{orig_path}'. "
+                        "Either provide path_genome_map or use naming convention "
+                        "like 'sample#chr1' or 'sample.chr1'."
+                    )
+                continue
+
+            # Parse normalized walk (simple space-separated segment IDs)
+            # AWK already validated all orientations are forward (+)
+            walk = normalized_walk.split() if normalized_walk else []
+
+            paths.append({
+                "name": path_name,
+                "walk": walk,
+                "genome_name": genome_name,
+            })
+
+        if errors:
+            error_summary = "\n".join(errors[:10])
+            if len(errors) > 10:
+                error_summary += f"\n... and {len(errors) - 10} more error(s)"
+            raise DataInvalidError(
+                f"Path parsing failed with {len(errors)} error(s):\n{error_summary}"
+            )
+
+        return paths
+
     def contains_sequence(self) -> bool:
         """Check if the GFA file contains sequence record."""
 
@@ -399,47 +620,66 @@ class GFA:
 
     def extract_subgraph_by_name(self, name: str, output_file: str = ""):
         """
-        Extract a subgraph by name from the GFA file, returning the sub-GFA's file path.
+        Extract a subgraph by EXACT name matching from the GFA file.
+
+        Fixed version that correctly distinguishes chr1 from chr10, chr1_alt, etc.
+        Uses unified AWK scripts that work for all GFA versions (1.0, 1.1, 1.2, 2.0).
 
         Args:
-            name (str): The name of the subgraph to extract.
-            output_file (str): The file path to save the subgraph. If not provided, the subgraph will be saved as `{basename}.{name}.gfa`.
+            name (str): The exact name of the subgraph to extract (e.g., "chr1").
+            output_file (str): The file path to save the subgraph. If not provided,
+                the subgraph will be saved as `{basename}.{name}.gfa`.
+
+        Returns:
+            str: Path to the extracted subgraph GFA file.
         """
 
         if not output_file:
-            output_file = self.filepath.replace(".gfa", f"{name}.gfa")
+            output_file = self.filepath.replace(".gfa", f".{name}.gfa")
 
-        set_record_file, main_file = fileutil.create_tmp_files(2)
+        path_records_file, main_file = fileutil.create_tmp_files(2)
 
-        awk_script_gfa1 = os.path.join(
-            hap.SOURCE_ROOT, "awk", "gfa", "extract_subgraph_gfa1.awk"
+        # Get AWK script paths
+        awk_pansn = os.path.join(
+            hap.SOURCE_ROOT, "awk", "gfa", "parse_pansn_str.awk"
         )
-        awk_script_gfa2 = os.path.join(
-            hap.SOURCE_ROOT, "awk", "gfa", "extract_subgraph_gfa2.awk"
+        awk_extract_paths = os.path.join(
+            hap.SOURCE_ROOT, "awk", "gfa", "extract_paths_by_name.awk"
+        )
+        awk_extract_main = os.path.join(
+            hap.SOURCE_ROOT, "awk", "gfa", "extract_subgraph_unified.awk"
         )
 
-        # `grep` -- Get records that contain set of nodes from the whole graph by subgraph name
-        # `awk` -- Extract node ids from set records, find related records by them
-        grep = ["LC_ALL=C", "grep", "-E"]
-        awk = ["awk", "-f"]
-        if self.version < 2:
-            grep.append(f"'^(P|W).*{name}'")
-            awk.append(awk_script_gfa1)
-        else:  # GFA 2
-            grep.append(f"'^(O|U).*{name}'")
-            awk.append(awk_script_gfa2)
-        grep.extend([self.filepath, ">", set_record_file])
-        awk.extend([set_record_file, self.filepath, ">", main_file])
+        # Step 1: Extract path lines (P/O/W/U) with EXACT name matching
+        cmd_paths = [
+            "awk",
+            "-v", f"subgraph_name={name}",
+            "-f", awk_pansn,
+            "-f", awk_extract_paths,
+            self.filepath,
+            ">", path_records_file
+        ]
 
-        # `cat` -- Concatenate main records with set records
-        cat = ["cat", main_file, set_record_file, ">", output_file]
+        # Step 2: Extract structural lines (H/S/L/E) for segments in paths
+        cmd_main = [
+            "awk",
+            "-f", awk_extract_main,
+            path_records_file,
+            self.filepath,
+            ">", main_file
+        ]
+
+        # Step 3: Concatenate main records with path records
+        cmd_concat = [
+            "cat", main_file, path_records_file, ">", output_file
+        ]
 
         try:
-            subprocess.run(" ".join(grep), shell=True)
-            subprocess.run(" ".join(awk), shell=True)
-            subprocess.run(" ".join(cat), shell=True)
+            subprocess.run(" ".join(cmd_paths), shell=True, check=True)
+            subprocess.run(" ".join(cmd_main), shell=True, check=True)
+            subprocess.run(" ".join(cmd_concat), shell=True, check=True)
         finally:
-            fileutil.remove_files([main_file, set_record_file])
+            fileutil.remove_files([path_records_file, main_file])
 
         return output_file
 

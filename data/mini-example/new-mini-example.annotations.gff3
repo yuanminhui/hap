@@ -1,0 +1,44 @@
+##gff-version 3
+##sequence-region hap1 1 88
+##sequence-region hap2 1 86
+##sequence-region hap3 1 85
+# Test annotations for new-mini-example.gfa
+# Design: Coverage across all 3 haplotypes with genes, mRNAs, exons, CDS
+# Some annotations span single segments, some span multiple segments
+# Tests both + and - strands
+hap1	manual	gene	5	45	.	+	.	ID=gene001;Name=TEST_GENE_1;description=Test gene spanning multiple segments
+hap1	manual	mRNA	5	45	.	+	.	ID=mRNA001;Parent=gene001;Name=TEST_GENE_1.1
+hap1	manual	exon	5	15	.	+	.	ID=exon001;Parent=mRNA001
+hap1	manual	exon	20	30	.	+	.	ID=exon002;Parent=mRNA001
+hap1	manual	exon	35	45	.	+	.	ID=exon003;Parent=mRNA001
+hap1	manual	CDS	8	15	.	+	0	ID=cds001;Parent=mRNA001
+hap1	manual	CDS	20	30	.	+	1	ID=cds002;Parent=mRNA001
+hap1	manual	CDS	35	42	.	+	2	ID=cds003;Parent=mRNA001
+hap1	manual	gene	60	85	.	-	.	ID=gene002;Name=REV_GENE;description=Reverse strand gene
+hap1	manual	mRNA	60	85	.	-	.	ID=mRNA002;Parent=gene002;Name=REV_GENE.1
+hap1	manual	exon	60	70	.	-	.	ID=exon004;Parent=mRNA002
+hap1	manual	exon	75	85	.	-	.	ID=exon005;Parent=mRNA002
+hap1	manual	CDS	62	70	.	-	0	ID=cds004;Parent=mRNA002
+hap1	manual	CDS	75	83	.	-	0	ID=cds005;Parent=mRNA002
+hap2	manual	gene	10	50	.	+	.	ID=gene003;Name=TEST_GENE_2;description=Gene on hap2
+hap2	manual	mRNA	10	50	.	+	.	ID=mRNA003;Parent=gene003;Name=TEST_GENE_2.1
+hap2	manual	exon	10	25	.	+	.	ID=exon006;Parent=mRNA003
+hap2	manual	exon	30	50	.	+	.	ID=exon007;Parent=mRNA003
+hap2	manual	CDS	12	25	.	+	0	ID=cds006;Parent=mRNA003
+hap2	manual	CDS	30	48	.	+	1	ID=cds007;Parent=mRNA003
+hap2	manual	gene	55	80	.	+	.	ID=gene004;Name=SINGLE_EXON;description=Single exon gene
+hap2	manual	mRNA	55	80	.	+	.	ID=mRNA004;Parent=gene004;Name=SINGLE_EXON.1
+hap2	manual	exon	55	80	.	+	.	ID=exon008;Parent=mRNA004
+hap2	manual	CDS	58	77	.	+	0	ID=cds008;Parent=mRNA004
+hap3	manual	gene	8	40	.	+	.	ID=gene005;Name=TEST_GENE_3;description=Gene on hap3
+hap3	manual	mRNA	8	40	.	+	.	ID=mRNA005;Parent=gene005;Name=TEST_GENE_3.1
+hap3	manual	exon	8	20	.	+	.	ID=exon009;Parent=mRNA005
+hap3	manual	exon	25	40	.	+	.	ID=exon010;Parent=mRNA005
+hap3	manual	CDS	10	20	.	+	0	ID=cds009;Parent=mRNA005
+hap3	manual	CDS	25	38	.	+	2	ID=cds010;Parent=mRNA005
+hap3	manual	gene	50	75	.	-	.	ID=gene006;Name=HAP3_REV;description=Reverse gene on hap3
+hap3	manual	mRNA	50	75	.	-	.	ID=mRNA006;Parent=gene006;Name=HAP3_REV.1
+hap3	manual	exon	50	60	.	-	.	ID=exon011;Parent=mRNA006
+hap3	manual	exon	65	75	.	-	.	ID=exon012;Parent=mRNA006
+hap3	manual	CDS	52	60	.	-	0	ID=cds011;Parent=mRNA006
+hap3	manual	CDS	65	73	.	-	0	ID=cds012;Parent=mRNA006
