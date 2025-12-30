@@ -1,0 +1,13 @@
+##gff-version 3
+##sequence-region chr1 1 85
+# Annotations for smp3 on chromosome 'chr1'
+chr1	manual	gene	15	55	.	+	.	ID=gene005;Name=TEST_GENE_3;description=Gene on smp3
+chr1	manual	mRNA	15	55	.	+	.	ID=mRNA005;Parent=gene005;Name=TEST_GENE_3.1
+chr1	manual	exon	15	30	.	+	.	ID=exon009;Parent=mRNA005
+chr1	manual	exon	35	55	.	+	.	ID=exon010;Parent=mRNA005
+chr1	manual	CDS	17	30	.	+	0	ID=cds009;Parent=mRNA005
+chr1	manual	CDS	35	53	.	+	1	ID=cds010;Parent=mRNA005
+chr1	manual	gene	65	82	.	-	.	ID=gene006;Name=SHORT_GENE;description=Short gene on smp3
+chr1	manual	mRNA	65	82	.	-	.	ID=mRNA006;Parent=gene006;Name=SHORT_GENE.1
+chr1	manual	exon	65	82	.	-	.	ID=exon011;Parent=mRNA006
+chr1	manual	CDS	67	80	.	-	0	ID=cds011;Parent=mRNA006

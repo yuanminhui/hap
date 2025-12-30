@@ -45,7 +45,7 @@ BEGIN {
     if (!resolved) {
         next
     }
-    n = pa[1] "." pa[2]
+    n = pa[1] "#" pa[2]  # Use # separator per PanSN specification
     for (i in a) {
         sid = substr(a[i], 1, length(a[i]) - 1)
         if (sid in harr) {
@@ -88,7 +88,7 @@ BEGIN {
     if (!resolved) {
         next
     }
-    n = pa[1] "." pa[2]
+    n = pa[1] "#" pa[2]  # Use # separator per PanSN specification
     for (i in a) {
         sid = a[i]
         if (sid in harr) {
@@ -110,11 +110,11 @@ END {
         print id, larr[id], c / hapcount, harr[id] >> nodefp
     }
 
-    for (hap in haplos) {
+    for (haplotype in haplos) {
         if (hapstr == "") {
-            hapstr = hap
+            hapstr = haplotype
         } else {
-            hapstr = hapstr "," hap
+            hapstr = hapstr "," haplotype
         }
     }
     print "haplotypes", hapstr >> infofp

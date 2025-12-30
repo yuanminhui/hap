@@ -1,0 +1,18 @@
+##gff-version 3
+##sequence-region chr1 1 88
+# Annotations for smp1 on sequence '1'
+# Import with: hap annotation add --file smp1.annotations.gff3 --genome-name smp1 --haplotype-index 0
+chr1	manual	gene	5	45	.	+	.	ID=gene001;Name=TEST_GENE_1;description=Test gene spanning multiple segments
+chr1	manual	mRNA	5	45	.	+	.	ID=mRNA001;Parent=gene001;Name=TEST_GENE_1.1
+chr1	manual	exon	5	15	.	+	.	ID=exon001;Parent=mRNA001
+chr1	manual	exon	20	30	.	+	.	ID=exon002;Parent=mRNA001
+chr1	manual	exon	35	45	.	+	.	ID=exon003;Parent=mRNA001
+chr1	manual	CDS	8	15	.	+	0	ID=cds001;Parent=mRNA001
+chr1	manual	CDS	20	30	.	+	1	ID=cds002;Parent=mRNA001
+chr1	manual	CDS	35	42	.	+	2	ID=cds003;Parent=mRNA001
+chr1	manual	gene	60	85	.	-	.	ID=gene002;Name=REV_GENE;description=Reverse strand gene
+chr1	manual	mRNA	60	85	.	-	.	ID=mRNA002;Parent=gene002;Name=REV_GENE.1
+chr1	manual	exon	60	70	.	-	.	ID=exon004;Parent=mRNA002
+chr1	manual	exon	75	85	.	-	.	ID=exon005;Parent=mRNA002
+chr1	manual	CDS	62	70	.	-	0	ID=cds004;Parent=mRNA002
+chr1	manual	CDS	75	83	.	-	0	ID=cds005;Parent=mRNA002

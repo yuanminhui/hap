@@ -10,10 +10,24 @@ CREATE TABLE IF NOT EXISTS clade (
 
 CREATE TABLE IF NOT EXISTS genome (
   id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-  name VARCHAR(30) NOT NULL UNIQUE,
+  name VARCHAR(30) NOT NULL,
+  haplotype_index SMALLINT NOT NULL DEFAULT 0,
+  haplotype_origin VARCHAR(10) CHECK(haplotype_origin IN ('provided', 'parsed', 'assumed')),
   description TEXT,
-  clade_id INTEGER
+  clade_id INTEGER,
+  UNIQUE(name, haplotype_index)
 );
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relname = 'genome_name_idx' AND n.nspname = 'public'
+    ) THEN
+        CREATE INDEX genome_name_idx ON genome(name);
+    END IF;
+END
+$$;
 
 -- Graphs
 CREATE TABLE IF NOT EXISTS pangenome (

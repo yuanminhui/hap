@@ -1,0 +1,15 @@
+# GTF format annotations for smp1
+chr1	manual	gene	5	45	.	+	.	gene_id "TEST_GENE_1"; gene_name "TEST_GENE_1"; description "Test gene spanning multiple segments";
+chr1	manual	transcript	5	45	.	+	.	gene_id "TEST_GENE_1"; transcript_id "TEST_GENE_1.1";
+chr1	manual	exon	5	15	.	+	.	gene_id "TEST_GENE_1"; transcript_id "TEST_GENE_1.1"; exon_number "1";
+chr1	manual	exon	20	30	.	+	.	gene_id "TEST_GENE_1"; transcript_id "TEST_GENE_1.1"; exon_number "2";
+chr1	manual	exon	35	45	.	+	.	gene_id "TEST_GENE_1"; transcript_id "TEST_GENE_1.1"; exon_number "3";
+chr1	manual	CDS	8	15	.	+	0	gene_id "TEST_GENE_1"; transcript_id "TEST_GENE_1.1";
+chr1	manual	CDS	20	30	.	+	1	gene_id "TEST_GENE_1"; transcript_id "TEST_GENE_1.1";
+chr1	manual	CDS	35	42	.	+	2	gene_id "TEST_GENE_1"; transcript_id "TEST_GENE_1.1";
+chr1	manual	gene	60	85	.	-	.	gene_id "REV_GENE"; gene_name "REV_GENE"; description "Reverse strand gene";
+chr1	manual	transcript	60	85	.	-	.	gene_id "REV_GENE"; transcript_id "REV_GENE.1";
+chr1	manual	exon	60	70	.	-	.	gene_id "REV_GENE"; transcript_id "REV_GENE.1"; exon_number "1";
+chr1	manual	exon	75	85	.	-	.	gene_id "REV_GENE"; transcript_id "REV_GENE.1"; exon_number "2";
+chr1	manual	CDS	62	70	.	-	0	gene_id "REV_GENE"; transcript_id "REV_GENE.1";
+chr1	manual	CDS	75	83	.	-	0	gene_id "REV_GENE"; transcript_id "REV_GENE.1";

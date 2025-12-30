@@ -1,0 +1,13 @@
+##gff-version 3
+##sequence-region chr1 1 86
+# Annotations for smp2 on chromosome 'chr1'
+chr1	manual	gene	10	50	.	+	.	ID=gene003;Name=TEST_GENE_2;description=Gene on smp2
+chr1	manual	mRNA	10	50	.	+	.	ID=mRNA003;Parent=gene003;Name=TEST_GENE_2.1
+chr1	manual	exon	10	25	.	+	.	ID=exon006;Parent=mRNA003
+chr1	manual	exon	30	50	.	+	.	ID=exon007;Parent=mRNA003
+chr1	manual	CDS	12	25	.	+	0	ID=cds006;Parent=mRNA003
+chr1	manual	CDS	30	48	.	+	1	ID=cds007;Parent=mRNA003
+chr1	manual	gene	55	80	.	+	.	ID=gene004;Name=SINGLE_EXON;description=Single exon gene
+chr1	manual	mRNA	55	80	.	+	.	ID=mRNA004;Parent=gene004;Name=SINGLE_EXON.1
+chr1	manual	exon	55	80	.	+	.	ID=exon008;Parent=mRNA004
+chr1	manual	CDS	57	78	.	+	0	ID=cds008;Parent=mRNA004

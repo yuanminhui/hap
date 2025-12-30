@@ -406,7 +406,6 @@ class AnnotationMapper:
             SELECT
                 segment_id,
                 segment_order,
-                orientation,
                 lower(coordinate) as seg_start,
                 upper(coordinate) as seg_end
             FROM path_segment_coordinate
@@ -447,7 +446,7 @@ class AnnotationMapper:
         coord_data = self._coord_cache[path_id]
         result = []
 
-        for seg_id, seg_order, orientation, seg_start, seg_end in coord_data:
+        for seg_id, seg_order, seg_start, seg_end in coord_data:
             # Check overlap: segment [seg_start, seg_end) vs annotation [start, end)
             if seg_end <= start:
                 continue  # Segment before annotation
@@ -462,18 +461,11 @@ class AnnotationMapper:
             seg_local_start = intersect_start - seg_start
             seg_local_end = intersect_end - seg_start
 
-            # Handle reverse orientation: flip coordinates
-            if orientation == "-":
-                segment_length = seg_end - seg_start
-                seg_local_start, seg_local_end = (
-                    segment_length - seg_local_end,
-                    segment_length - seg_local_start,
-                )
+            # Note: All paths are forward-only (validated during GFA parsing)
 
             result.append({
                 "segment_id": seg_id,
                 "segment_order": seg_order,
-                "orientation": orientation,
                 "segment_start": seg_local_start,
                 "segment_end": seg_local_end,
             })
@@ -486,7 +478,6 @@ class AnnotationMapper:
             SELECT
                 segment_id,
                 segment_order,
-                orientation,
                 lower(coordinate) as seg_path_start,
                 upper(coordinate) as seg_path_end
             FROM path_segment_coordinate
@@ -505,7 +496,7 @@ class AnnotationMapper:
         # Calculate segment-local coordinates for each overlapping segment
         result = []
         for row in rows:
-            seg_id, seg_order, orientation, seg_path_start, seg_path_end = row
+            seg_id, seg_order, seg_path_start, seg_path_end = row
 
             # Calculate intersection
             intersect_start = max(start, seg_path_start)
@@ -515,18 +506,11 @@ class AnnotationMapper:
             seg_local_start = intersect_start - seg_path_start
             seg_local_end = intersect_end - seg_path_start
 
-            # Handle reverse orientation: flip coordinates
-            if orientation == "-":
-                segment_length = seg_path_end - seg_path_start
-                seg_local_start, seg_local_end = (
-                    segment_length - seg_local_end,
-                    segment_length - seg_local_start,
-                )
+            # Note: All paths are forward-only (validated during GFA parsing)
 
             result.append({
                 "segment_id": seg_id,
                 "segment_order": seg_order,
-                "orientation": orientation,
                 "segment_start": seg_local_start,
                 "segment_end": seg_local_end,
             })
@@ -567,53 +551,71 @@ def import_annotations(
     connection: psycopg2.extensions.connection,
     filepath: str,
     format_type: str,
-    hap_name: Optional[str] = None,
-    path_name: Optional[str] = None,
-    subgraph_id: Optional[int] = None,
+    genome_name: str,
+    haplotype_index: Optional[int] = None,
+    subgraph_name: Optional[str] = None,
 ) -> int:
     """Import annotations from file into database.
 
-    Per plan.freeze.json: Complete pipeline:
-    1. Validate target (hap/path/subgraph exists)
+    Core Logic:
+    - Annotation file seqid = subgraph.name (e.g., "chr1", "1")
+    - Must specify genome_name to identify which genome's paths to use
+    - haplotype_index is optional: if not provided, auto-select first available (0, 1, 2, ...)
+
+    Pipeline:
+    1. Resolve genome_id (auto-select haplotype if needed)
     2. Parse annotation file
-    3. Map each annotation to segments
-    4. Generate annotation_span records for ALL annotations
-    5. Insert into annotation, annotation_span, and type-specific tables
+    3. Group by seqid
+    4. For each seqid: find path (subgraph.name=seqid AND genome_id)
+    5. Map annotations to segments and insert
 
     Args:
         connection: Database connection
         filepath: Path to annotation file
         format_type: "gff3", "gtf", or "bed"
-        hap_name: HAP name (optional)
-        path_name: Path name (required)
-        subgraph_id: Subgraph ID (optional)
+        genome_name: Genome name (required, e.g., "hap1", "HG002")
+        haplotype_index: Haplotype index (optional, auto-select if None)
+        subgraph_name: Filter to specific subgraph (optional)
 
     Returns:
         Number of annotations imported
+
+    Example:
+        import_annotations(conn, "anno.gff3", "gff3", genome_name="HG002", haplotype_index=1)
+        import_annotations(conn, "anno.gff3", "gff3", genome_name="HG002")  # auto-select haplotype
     """
-    if not path_name:
-        raise ValueError("path_name is required for annotation import")
 
-    # Step 1: Validate and get path info
-    query_path = """
-        SELECT p.id, p.subgraph_id, p.genome_id
-        FROM path p
-        WHERE p.name = %s
-    """
-    params = [path_name]
+    # Step 1: Resolve genome_id
+    cursor = connection.cursor()
 
-    if subgraph_id is not None:
-        query_path += " AND p.subgraph_id = %s"
-        params.append(subgraph_id)
-
-    with connection.cursor() as cur:
-        cur.execute(query_path, params)
-        path_row = cur.fetchone()
-
-    if not path_row:
-        raise DataInvalidError(f"Path '{path_name}' not found in database")
-
-    path_id, resolved_subgraph_id, genome_id = path_row
+    if haplotype_index is not None:
+        # Explicit haplotype_index provided
+        cursor.execute(
+            "SELECT id FROM genome WHERE name = %s AND haplotype_index = %s",
+            (genome_name, haplotype_index)
+        )
+        result = cursor.fetchone()
+        if not result:
+            raise DataInvalidError(
+                f"Genome not found: name='{genome_name}', haplotype_index={haplotype_index}"
+            )
+        genome_id = result[0]
+        resolved_haplotype_index = haplotype_index
+    else:
+        # Auto-select: find first available haplotype (0, 1, 2, ...)
+        cursor.execute(
+            """SELECT id, haplotype_index FROM genome
+               WHERE name = %s
+               ORDER BY haplotype_index
+               LIMIT 1""",
+            (genome_name,)
+        )
+        result = cursor.fetchone()
+        if not result:
+            raise DataInvalidError(f"No genome found with name='{genome_name}'")
+        genome_id, resolved_haplotype_index = result
+        import click
+        click.echo(f"Auto-selected haplotype_index={resolved_haplotype_index} for genome '{genome_name}'")
 
     # Step 2: Parse annotation file
     if format_type == "gff3":
@@ -628,34 +630,88 @@ def import_annotations(
     if not parsed_annotations:
         return 0
 
-    # Step 3: Map annotations to segments (OPTIMIZED: batch processing)
-    mapper = AnnotationMapper(connection)
+    # Step 3: Group by seqid (seqid = subgraph.name)
+    by_seqid = {}
+    for ann in parsed_annotations:
+        seqid = ann["seqid"]
+        by_seqid.setdefault(seqid, []).append(ann)
 
-    # Preload path coordinates once for all annotations
+    # Step 4: For each seqid, find corresponding path and import
+    total_imported = 0
+
+    for seqid, anns in by_seqid.items():
+        # Skip if not target subgraph
+        if subgraph_name and seqid != subgraph_name:
+            continue
+
+        # Find path: subgraph.name=seqid AND genome_id=genome_id
+        query_path = """
+            SELECT p.id, p.name, p.subgraph_id, s.name as subgraph_name
+            FROM path p
+            JOIN subgraph s ON p.subgraph_id = s.id
+            WHERE s.name = %s AND p.genome_id = %s
+        """
+        cursor.execute(query_path, (seqid, genome_id))
+        result = cursor.fetchone()
+
+        if not result:
+            # List available subgraphs for this genome
+            cursor.execute(
+                """SELECT DISTINCT s.name
+                   FROM subgraph s
+                   JOIN path p ON s.id = p.subgraph_id
+                   WHERE p.genome_id = %s
+                   ORDER BY s.name""",
+                (genome_id,)
+            )
+            available = [row[0] for row in cursor.fetchall()]
+
+            raise DataInvalidError(
+                f"Path not found for seqid '{seqid}' with genome '{genome_name}' haplotype {resolved_haplotype_index}.\n"
+                f"Available subgraphs for this genome: {available}"
+            )
+
+        path_id, path_name, subgraph_id, subgraph_name_db = result
+
+        # Import annotations for this seqid to the found path
+        count = _import_to_single_path_helper(
+            connection, path_id, genome_id, subgraph_id, anns, format_type
+        )
+        total_imported += count
+
+        import click
+        click.echo(
+            f"  Imported {count} annotations: seqid '{seqid}' → path '{path_name}' "
+            f"(genome: {genome_name}#{resolved_haplotype_index})"
+        )
+
+    return total_imported
+
+
+def _import_to_single_path_helper(
+    connection, path_id, genome_id, subgraph_id, annotations, format_type
+):
+    """Helper function to import annotations to a single path."""
+
+    # Map annotations to segments
+    mapper = AnnotationMapper(connection)
     mapper.preload_path_coordinates(path_id)
 
     annotation_records = []
-    annotation_gene_records = []
     annotation_span_records = []
 
-    # Get starting IDs for batch insert
+    # Get starting IDs
     next_annotation_id = db.get_next_id_from_table(connection, "annotation")
     next_span_id = db.get_next_id_from_table(connection, "annotation_span")
 
     annotation_id_counter = next_annotation_id
     span_id_counter = next_span_id
 
-    # Determine source from format_type
     source_map = {"gff3": "GFF3", "gtf": "GTF", "bed": "BED"}
     source = source_map.get(format_type, format_type.upper())
 
-    # Mapping: GFF3/GTF ID string -> annotation.id (for parent_id resolution)
-    id_string_to_annotation_id = {}
-    # Mapping: ID string -> gene_id (for inheritance)
-    id_to_gene_id = {}
-
-    for ann in parsed_annotations:
-        # Map annotation to segments (using preloaded cache)
+    for ann in annotations:
+        # Map annotation to segments
         segments = mapper.map_annotation_to_segments(
             path_id, ann["start"], ann["end"]
         )
@@ -666,89 +722,28 @@ def import_annotations(
 
         attrs = ann.get("attributes", {})
         ann_type = ann["type"]
-        feature_id = attrs.get("ID")
+
+        # Extract label
+        label = None
+        if attrs:
+            label = attrs.get("Name") or attrs.get("ID") or attrs.get("gene_name") or attrs.get("transcript_name")
 
         # Create annotation record
         annotation_records.append({
             "id": annotation_id_counter,
-            "subgraph_id": resolved_subgraph_id,
+            "subgraph_id": subgraph_id,
             "path_id": path_id,
             "coordinate": f"[{ann['start']},{ann['end']})",
             "type": ann_type,
-            "label": ann.get("name") or attrs.get("Name") or feature_id,
-            "strand": ann["strand"],
+            "label": label,
+            "strand": ann.get("strand", "."),
             "source": source,
             "score": ann.get("score"),
             "attributes": attrs,
             "genome_id": genome_id,
         })
 
-        # Map feature_kind from GFF3/GTF type
-        feature_kind_map = {
-            "gene": "gene",
-            "mRNA": "transcript",
-            "transcript": "transcript",
-            "lncRNA": "transcript",
-            "lncRNA_gene": "gene",
-            "miRNA": "transcript",
-            "miRNA_gene": "gene",
-            "tRNA": "transcript",
-            "rRNA": "transcript",
-            "snoRNA": "transcript",
-            "snRNA": "transcript",
-            "ncRNA": "transcript",
-            "ncRNA_gene": "gene",
-            "exon": "exon",
-            "CDS": "cds",
-            "five_prime_UTR": "utr5",
-            "three_prime_UTR": "utr3",
-            "intron": "intron",
-        }
-        feature_kind = feature_kind_map.get(ann_type)
-
-        if feature_kind:
-            # Extract parent_id from attributes (GFF3 Parent field)
-            parent_string = attrs.get("Parent")
-            parent_annotation_id = id_string_to_annotation_id.get(parent_string)
-
-            # Extract gene_id and transcript_id
-            gene_id = None
-            transcript_id = None
-            biotype = attrs.get("biotype") or attrs.get("gene_type")
-            phase = ann.get("phase")
-
-            if feature_kind == "gene":
-                # Gene level: extract gene_id from ID
-                gene_id = feature_id or attrs.get("gene_id")
-                # Store for children to inherit
-                if feature_id:
-                    id_to_gene_id[feature_id] = gene_id
-            elif feature_kind == "transcript":
-                # Transcript level: extract transcript_id, inherit gene_id
-                transcript_id = feature_id or attrs.get("transcript_id")
-                gene_id = attrs.get("gene_id") or id_to_gene_id.get(parent_string)
-                # Store for children
-                if feature_id:
-                    id_to_gene_id[feature_id] = gene_id
-            else:
-                # Exon/CDS/UTR level: inherit both gene_id and transcript_id from parent
-                gene_id = id_to_gene_id.get(parent_string)
-                # Transcript_id is the parent if parent is a transcript
-                if parent_string:
-                    # Check if parent is transcript-level
-                    transcript_id = parent_string  # Simplified: assume direct parent is transcript
-
-            annotation_gene_records.append({
-                "annotation_id": annotation_id_counter,
-                "feature_kind": feature_kind,
-                "gene_id": gene_id,
-                "transcript_id": transcript_id,
-                "parent_id": parent_annotation_id,
-                "biotype": biotype,
-                "phase": phase,
-            })
-
-        # Create annotation_span records for ALL annotations
+        # Create annotation_span records
         for span_order, seg in enumerate(segments):
             annotation_span_records.append({
                 "id": span_id_counter,
@@ -759,64 +754,40 @@ def import_annotations(
             })
             span_id_counter += 1
 
-        # Store ID mapping for parent resolution
-        if feature_id:
-            id_string_to_annotation_id[feature_id] = annotation_id_counter
-
         annotation_id_counter += 1
 
+    # Insert into database
     if not annotation_records:
         return 0
 
-    # Step 4: Bulk insert using pandas + COPY
-    df_annotation = pd.DataFrame(annotation_records)
-    df_span = pd.DataFrame(annotation_span_records)
+    import json
+    with connection.cursor() as cur:
+        # Insert annotations
+        ann_query = """
+            INSERT INTO annotation (id, subgraph_id, path_id, coordinate, type, label, strand, source, score, attributes, genome_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s);
+        """
+        ann_values = [
+            (rec["id"], rec["subgraph_id"], rec["path_id"], rec["coordinate"], rec["type"],
+             rec["label"], rec["strand"], rec["source"], rec["score"],
+             json.dumps(rec["attributes"]) if rec["attributes"] else None,
+             rec["genome_id"])
+            for rec in annotation_records
+        ]
+        cur.executemany(ann_query, ann_values)
 
-    # Convert JSONB attributes to string for COPY
-    df_annotation["attributes"] = df_annotation["attributes"].apply(
-        lambda x: pd.io.json.dumps(x) if x else None
-    )
-
-    # Insert annotations
-    db.copy_from_df(
-        connection,
-        df_annotation,
-        "annotation",
-        columns=[
-            "id",
-            "subgraph_id",
-            "path_id",
-            "coordinate",
-            "type",
-            "label",
-            "strand",
-            "source",
-            "score",
-            "attributes",
-            "genome_id",
-        ],
-    )
-
-    # Insert annotation_gene records
-    if annotation_gene_records:
-        df_gene = pd.DataFrame(annotation_gene_records)
-        db.copy_from_df(
-            connection,
-            df_gene,
-            "annotation_gene",
-            columns=["annotation_id", "feature_kind", "gene_id", "transcript_id", "parent_id", "biotype", "phase"],
-        )
-
-    # Insert annotation_spans
-    db.copy_from_df(
-        connection,
-        df_span,
-        "annotation_span",
-        columns=["id", "annotation_id", "segment_id", "coordinate", "span_order"],
-    )
+        # Insert annotation_spans
+        span_query = """
+            INSERT INTO annotation_span (id, annotation_id, segment_id, coordinate, span_order)
+            VALUES (%s, %s, %s, %s, %s);
+        """
+        span_values = [
+            (rec["id"], rec["annotation_id"], rec["segment_id"], rec["coordinate"], rec["span_order"])
+            for rec in annotation_span_records
+        ]
+        cur.executemany(span_query, span_values)
 
     connection.commit()
-
     return len(annotation_records)
 
 
@@ -1058,20 +1029,20 @@ annotation = main
 
 @annotation.command(name="add")
 @click.option(
-    "--hap",
-    type=str,
-    help="HAP name (optional)",
-)
-@click.option(
-    "--path",
+    "--genome-name",
     type=str,
     required=True,
-    help="Path name (required)",
+    help="Genome name (sample name, e.g., 'hap1', 'HG002')",
+)
+@click.option(
+    "--haplotype-index",
+    type=int,
+    help="Haplotype index (0, 1, 2, ...). If not specified, auto-selects first available.",
 )
 @click.option(
     "--subgraph",
-    type=int,
-    help="Subgraph ID (optional)",
+    type=str,
+    help="Filter to specific subgraph name (optional)",
 )
 @click.option(
     "--file",
@@ -1085,19 +1056,30 @@ annotation = main
     help="File format (auto-detected if not specified)",
 )
 def add_annotation(
-    hap: Optional[str],
-    path: str,
-    subgraph: Optional[int],
+    genome_name: str,
+    haplotype_index: Optional[int],
+    subgraph: Optional[str],
     file: str,
     format: Optional[str],
 ):
     """Import annotations from GFF3/GTF/BED file.
 
-    Per plan.freeze.json: Add annotations to a specific path.
-    Annotations are mapped from path coordinates to segment coordinates.
+    The file's seqid column must match subgraph.name in the database.
+    You must specify which genome these annotations belong to.
 
-    Example:
-        hap annotation add --path chr1 --file annotations.gff3
+    Examples:
+        # Import with explicit haplotype index
+        hap annotation add --file anno.gff3 --genome-name HG002 --haplotype-index 1
+
+        # Auto-select haplotype (uses first available, e.g., haplotype_index=0)
+        hap annotation add --file anno.gff3 --genome-name hap1
+
+        # Import only specific subgraph from multi-chromosome file
+        hap annotation add --file anno.gff3 --genome-name HG002 --haplotype-index 1 --subgraph chr1
+
+    Note:
+        - seqid in annotation file = subgraph.name (e.g., "chr1", "1")
+        - NOT path.name (e.g., NOT "HG002#1#chr1")
     """
     # Auto-detect format if not specified
     if not format:
@@ -1105,24 +1087,21 @@ def add_annotation(
         click.echo(f"Auto-detected format: {format}")
 
     # Get database connection
-    conn = db.get_connection()
-
-    try:
-        num_imported = import_annotations(
-            connection=conn,
-            filepath=file,
-            format_type=format.lower(),
-            hap_name=hap,
-            path_name=path,
-            subgraph_id=subgraph,
-        )
-        click.echo(f"Successfully imported {num_imported} annotations")
-    except Exception as e:
-        conn.rollback()
-        click.echo(f"Error importing annotations: {e}", err=True)
-        raise
-    finally:
-        conn.close()
+    with db.auto_connect() as conn:
+        try:
+            num_imported = import_annotations(
+                connection=conn,
+                filepath=file,
+                format_type=format.lower(),
+                genome_name=genome_name,
+                haplotype_index=haplotype_index,
+                subgraph_name=subgraph,
+            )
+            click.echo(f"Successfully imported {num_imported} annotations")
+        except Exception as e:
+            conn.rollback()
+            click.echo(f"Error importing annotations: {e}", err=True)
+            raise
 
 
 @annotation.command(name="get")
@@ -1165,9 +1144,7 @@ def get_annotation(
         hap annotation get --label "BRCA.*" --format gff3
         hap annotation get --range 1000-5000 --path chr1
     """
-    conn = db.get_connection()
-
-    try:
+    with db.auto_connect() as conn:
         # Build query based on filters
         filters = {}
         if ann_ids:
@@ -1210,9 +1187,6 @@ def get_annotation(
             for line in output_lines:
                 click.echo(line)
 
-    finally:
-        conn.close()
-
 
 @annotation.command(name="edit")
 @click.option("--id", "ann_id", type=int, required=True, help="Annotation ID to edit")
@@ -1230,9 +1204,7 @@ def edit_annotation(ann_id: int, label: Optional[str], ann_type: Optional[str]):
         click.echo("Error: Must provide at least one field to edit (--label or --type)", err=True)
         return
 
-    conn = db.get_connection()
-
-    try:
+    with db.auto_connect() as conn:
         # Build UPDATE query
         updates = []
         params = []
@@ -1248,21 +1220,20 @@ def edit_annotation(ann_id: int, label: Optional[str], ann_type: Optional[str]):
 
         query = f"UPDATE annotation SET {', '.join(updates)} WHERE id = %s;"
 
-        with conn.cursor() as cur:
-            cur.execute(query, params)
-            if cur.rowcount == 0:
-                click.echo(f"No annotation found with ID {ann_id}", err=True)
-                return
+        try:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                if cur.rowcount == 0:
+                    click.echo(f"No annotation found with ID {ann_id}", err=True)
+                    return
 
-        conn.commit()
-        click.echo(f"Successfully updated annotation {ann_id}")
+            conn.commit()
+            click.echo(f"Successfully updated annotation {ann_id}")
 
-    except Exception as e:
-        conn.rollback()
-        click.echo(f"Error editing annotation: {e}", err=True)
-        raise
-    finally:
-        conn.close()
+        except Exception as e:
+            conn.rollback()
+            click.echo(f"Error editing annotation: {e}", err=True)
+            raise
 
 
 @annotation.command(name="delete")
@@ -1286,59 +1257,56 @@ def delete_annotation(
         hap annotation delete --id 123 --confirm
         hap annotation delete --label "test.*" --type gene --confirm
     """
-    conn = db.get_connection()
+    with db.auto_connect() as conn:
+        try:
+            # Build filter for finding annotations
+            filters = {}
+            if ann_ids:
+                filters["ids"] = list(ann_ids)
+            if label:
+                filters["label"] = label
+            if ann_type:
+                filters["type"] = ann_type
+            if path:
+                filters["path"] = path
 
-    try:
-        # Build filter for finding annotations
-        filters = {}
-        if ann_ids:
-            filters["ids"] = list(ann_ids)
-        if label:
-            filters["label"] = label
-        if ann_type:
-            filters["type"] = ann_type
-        if path:
-            filters["path"] = path
-
-        if not filters:
-            click.echo("Error: Must provide at least one filter", err=True)
-            return
-
-        # Find matching annotations
-        annotations = query_annotations(conn, filters)
-
-        if not annotations:
-            click.echo("No annotations found matching the criteria")
-            return
-
-        # Confirm deletion
-        if not confirm:
-            click.echo(f"Found {len(annotations)} annotation(s) to delete:")
-            for ann in annotations[:10]:  # Show first 10
-                click.echo(f"  ID {ann['id']}: {ann['label']} ({ann['type']}) on {ann['path_name']}")
-            if len(annotations) > 10:
-                click.echo(f"  ... and {len(annotations) - 10} more")
-
-            if not click.confirm("Do you want to delete these annotations?"):
-                click.echo("Deletion cancelled")
+            if not filters:
+                click.echo("Error: Must provide at least one filter", err=True)
                 return
 
-        # Delete annotations
-        ann_ids_to_delete = [ann["id"] for ann in annotations]
+            # Find matching annotations
+            annotations = query_annotations(conn, filters)
 
-        query = "DELETE FROM annotation WHERE id = ANY(%s);"
-        with conn.cursor() as cur:
-            cur.execute(query, (ann_ids_to_delete,))
+            if not annotations:
+                click.echo("No annotations found matching the criteria")
+                return
 
-        conn.commit()
-        click.echo(f"Successfully deleted {len(annotations)} annotation(s)")
+            # Confirm deletion
+            if not confirm:
+                click.echo(f"Found {len(annotations)} annotation(s) to delete:")
+                for ann in annotations[:10]:  # Show first 10
+                    click.echo(f"  ID {ann['id']}: {ann['label']} ({ann['type']}) on {ann['path_name']}")
+                if len(annotations) > 10:
+                    click.echo(f"  ... and {len(annotations) - 10} more")
 
-    except Exception as e:
-        conn.rollback()
-        click.echo(f"Error deleting annotations: {e}", err=True)
-        raise
-    finally:
-        conn.close()
+                if not click.confirm("Do you want to delete these annotations?"):
+                    click.echo("Deletion cancelled")
+                    return
+
+            # Delete annotations
+            ann_ids_to_delete = [ann["id"] for ann in annotations]
+
+            query = "DELETE FROM annotation WHERE id = ANY(%s);"
+            with conn.cursor() as cur:
+                cur.execute(query, (ann_ids_to_delete,))
+
+            conn.commit()
+            click.echo(f"Successfully deleted {len(annotations)} annotation(s)")
+
+        except Exception as e:
+            conn.rollback()
+            click.echo(f"Error deleting annotations: {e}", err=True)
+            raise
 
 
 @annotation.command(name="export")
@@ -1369,31 +1337,33 @@ def export_annotation(
         click.echo("Error: Must provide --path or --subgraph", err=True)
         return
 
-    conn = db.get_connection()
+    with db.auto_connect() as conn:
+        try:
+            # Build filter
+            filters = {}
+            if path:
+                filters["path"] = path
+            if subgraph:
+                filters["subgraph"] = subgraph
 
-    try:
-        # Build filter
-        filters = {}
-        if path:
-            filters["path"] = path
-        if subgraph:
-            filters["subgraph"] = subgraph
+            # Query annotations
+            annotations = query_annotations(conn, filters)
 
-        # Query annotations
-        annotations = query_annotations(conn, filters)
+            if not annotations:
+                click.echo("No annotations found to export")
+                return
 
-        if not annotations:
-            click.echo("No annotations found to export")
-            return
+            # Format output
+            output_lines = format_annotations(annotations, format_type)
 
-        # Format output
-        output_lines = format_annotations(annotations, format_type)
+            # Write to file
+            with open(output, "w") as f:
+                f.write("\n".join(output_lines) + "\n")
 
-        # Write to file
-        with open(output, "w") as f:
-            f.write("\n".join(output_lines) + "\n")
+            click.echo(f"Successfully exported {len(annotations)} annotation(s) to {output}")
 
-        click.echo(f"Successfully exported {len(annotations)} annotation(s) to {output}")
+        except Exception as e:
+            conn.rollback()
+            click.echo(f"Error exporting annotations: {e}", err=True)
+            raise
 
-    finally:
-        conn.close()

@@ -1,0 +1,25 @@
+# BED format test annotations for new-mini-example.gfa
+# Contains BED3, BED6, and BED12 examples
+# BED uses 0-based start, half-open end (same as internal coordinates)
+#
+# BED3 examples (chrom, start, end)
+hap1	4	45
+hap2	9	50
+hap3	7	40
+#
+# BED6 examples (chrom, start, end, name, score, strand)
+hap1	4	45	TEST_GENE_1	100	+
+hap1	59	85	REV_GENE	80	-
+hap2	9	50	TEST_GENE_2	95	+
+hap2	54	80	SINGLE_EXON	90	+
+hap3	7	40	TEST_GENE_3	85	+
+hap3	49	75	HAP3_REV	75	-
+#
+# BED12 examples (full gene structure with exons)
+# Format: chrom, start, end, name, score, strand, thickStart, thickEnd, itemRgb, blockCount, blockSizes, blockStarts
+hap1	4	45	TEST_GENE_1	100	+	7	42	0,128,0	3	11,11,11	0,15,30
+hap1	59	85	REV_GENE	80	-	61	83	0,0,255	2	11,11	0,15
+hap2	9	50	TEST_GENE_2	95	+	11	48	0,128,0	2	16,21	0,20
+hap2	54	80	SINGLE_EXON	90	+	57	77	128,0,128	1	26	0
+hap3	7	40	TEST_GENE_3	85	+	9	38	0,128,0	2	13,16	0,17
+hap3	49	75	HAP3_REV	75	-	51	73	0,0,255	2	11,11	0,15

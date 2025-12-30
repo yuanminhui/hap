@@ -196,24 +196,25 @@ function normalize_walk_w(walk_str, path_name,    i, j, orient, seg_id, result) 
 # Format: W <sample> <hap_index> <seq_name> <start> <end> <walk>
 /^W/ {
     sample = $2
+    hap_index = $3
     seq_name = $4
 
-    if (seq_name == "") {
-        print "WARNING: Empty path name at line " NR ", assigning EMPTY_PATH_" NR > "/dev/stderr"
-        seq_name = "EMPTY_PATH_" NR
-        genome_name = "ERROR:EMPTY"
-        print seq_name, genome_name, ""
+    if (sample == "") {
+        print "WARNING: Empty sample name at line " NR ", skipping" > "/dev/stderr"
         next
     }
 
-    # For W lines, genome is sample field
-    genome_name = sample
+    # Construct PanSN-compliant path name: sample#haplotype#sequence
+    # genome_name: sample#haplotype (e.g., "hap1#0", "HG002#1")
+    # path_name: sample#haplotype#sequence (e.g., "hap1#0#chr1", "HG002#1#1")
+    genome_name = sample "#" hap_index
+    path_name = sample "#" hap_index "#" seq_name
 
     # Normalize and validate walk
-    normalized_walk = normalize_walk_w($7, seq_name)
+    normalized_walk = normalize_walk_w($7, path_name)
 
     if (normalized_walk != "" || error_count == 0) {
-        print seq_name, genome_name, normalized_walk
+        print path_name, genome_name, normalized_walk
     }
 }
 

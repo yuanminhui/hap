@@ -1506,8 +1506,24 @@ def generate_path_data(
                     path_info_list = gfa_obj.parse_paths(path_genome_map)
                     for pinfo in path_info_list:
                         if pinfo["name"] == path_name:
-                            genome_name = pinfo["genome_name"]
-                            genome_id = id_map_genome.get(genome_name, 0)
+                            genome_name_str = pinfo["genome_name"]
+
+                            # Parse genome_name: "sample#haplotype_index" (e.g., "HG002#1")
+                            if '#' in genome_name_str:
+                                sample, haplotype_str = genome_name_str.rsplit('#', 1)
+                                haplotype_index = int(haplotype_str)
+                            else:
+                                sample = genome_name_str
+                                haplotype_index = 0
+
+                            # Lookup genome_id using (sample, haplotype_index) key
+                            genome_id = id_map_genome.get((sample, haplotype_index), 0)
+
+                            if genome_id == 0:
+                                raise DataInvalidError(
+                                    f"Genome ('{sample}', {haplotype_index}) not found in id_map_genome. "
+                                    f"Available: {list(id_map_genome.keys())}"
+                                )
                             break
 
                 # Skip paths with unresolved genome_id
@@ -1542,6 +1558,13 @@ def generate_path_data(
         # Convert to DataFrames
         paths_df = pd.DataFrame(paths_data)
         path_seg_coords_df = pd.DataFrame(coord_data)
+
+        # Filter coordinates to only include paths that were accepted
+        if not paths_df.empty and not path_seg_coords_df.empty:
+            accepted_path_ids = set(paths_df['id'])
+            path_seg_coords_df = path_seg_coords_df[
+                path_seg_coords_df['path_id'].isin(accepted_path_ids)
+            ].reset_index(drop=True)
 
         # Type conversion
         if not paths_df.empty:
@@ -1723,25 +1746,47 @@ def hap2db(
                 update_ids_by_subgraph(rt, st, subgraph_id, conn, sequence_file)
 
                 # Add genome IDs to hap_info
-                id_map_genome: dict[str, int] = {}
-                for genome_name in meta["sources"]:
+                # Parse sources format: "sample:haplotype_index:haplotype_origin"
+                id_map_genome: dict[tuple[str, int], int] = {}
+                for genome_str in meta["sources"]:
+                    if genome_str == "":
+                        continue
+
+                    # Parse "sample:haplotype_index:haplotype_origin"
+                    parts = genome_str.split(":")
+                    if len(parts) >= 2:
+                        sample = parts[0]
+                        haplotype_index = int(parts[1])
+                        haplotype_origin = parts[2] if len(parts) > 2 else 'assumed'
+                    else:
+                        # Fallback for unexpected format
+                        sample = genome_str
+                        haplotype_index = 0
+                        haplotype_origin = 'assumed'
+
+                    # Check if genome exists
                     cursor.execute(
-                        "SELECT id FROM genome WHERE name = %s", (genome_name,)
+                        "SELECT id FROM genome WHERE name = %s AND haplotype_index = %s",
+                        (sample, haplotype_index)
                     )
                     result = cursor.fetchone()
+
                     if result is not None:
                         genome_id = result[0]
                     else:
+                        # Insert new genome
                         cursor.execute(
-                            "INSERT INTO genome (name, clade_id) VALUES (%s, %s) RETURNING id",
-                            (genome_name, clade_id),
-                        )  # Add `genome` record
+                            """INSERT INTO genome (name, haplotype_index, haplotype_origin, clade_id)
+                               VALUES (%s, %s, %s, %s) RETURNING id""",
+                            (sample, haplotype_index, haplotype_origin, clade_id)
+                        )
                         result = cursor.fetchone()
                         if result is None:
                             raise DatabaseError("Failed to insert genome record.")
-                        else:
-                            genome_id = result[0]
-                    id_map_genome[genome_name] = genome_id
+                        genome_id = result[0]
+
+                    # Store with (sample, haplotype_index) as key
+                    id_map_genome[(sample, haplotype_index)] = genome_id
                 hap_info["genome_ids"] = list(
                     set().union(hap_info["genome_ids"], id_map_genome.values())
                 )

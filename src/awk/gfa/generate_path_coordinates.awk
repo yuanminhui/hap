@@ -68,7 +68,8 @@ FILENAME == genome_map_file && NR != FNR {
     seq_name = $4
     walk_str = $7
 
-    # Construct path name from sample + hap + seq_name
+    # Construct PanSN-compliant path name: sample#haplotype#sequence
+    # This must match the naming in parse_gfa_paths.awk
     path_name = sample "#" hap_index "#" seq_name
 
     process_w_line(path_name, walk_str)

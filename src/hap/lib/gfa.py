@@ -232,14 +232,21 @@ class GFA:
                         errors.append(
                             f"Line {line_num}: W line hap_index '{parts[2]}' is not an integer"
                         )
-                    # Validate start/end are integers
-                    try:
-                        int(parts[4])
-                        int(parts[5])
-                    except ValueError:
-                        errors.append(
-                            f"Line {line_num}: W line start/end coordinates must be integers"
-                        )
+                    # Validate start/end are integers or '*' (wildcard for entire sequence)
+                    if parts[4] != "*":
+                        try:
+                            int(parts[4])
+                        except ValueError:
+                            errors.append(
+                                f"Line {line_num}: W line start coordinate must be integer or '*'"
+                            )
+                    if parts[5] != "*":
+                        try:
+                            int(parts[5])
+                        except ValueError:
+                            errors.append(
+                                f"Line {line_num}: W line end coordinate must be integer or '*'"
+                            )
 
         if errors:
             return False, errors

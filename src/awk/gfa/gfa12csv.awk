@@ -25,25 +25,38 @@ BEGIN {
 /^P/ {
     split($3, a, ",")
 
-    # extract haplotype name
+    # Extract genome info from P-line path name
+    # Output format for sources: "sample:haplotype_index:haplotype_origin"
     resolved = parse_pansn_str($2, pa)
-    if (!resolved) {
-        next
+    if (resolved) {
+        # PanSN format "sample#haplotype#sequence"
+        # pa[1]=sample, pa[2]=haplotype_index, pa[3]=sequence
+        sample = pa[1]
+        haplotype = pa[2]
+        origin = "parsed"  # haplotype info parsed from PanSN
+    } else {
+        # Non-PanSN: use whole path name as sample, default haplotype=0
+        sample = $2
+        haplotype = "0"
+        origin = "assumed"  # haplotype defaulted to 0
     }
-    n = pa[1] "." pa[2]
+
+    # Genome key: "sample:haplotype_index:haplotype_origin"
+    n = sample ":" haplotype ":" origin
+
     if (!(n in haplos)) {
         haplos[n]
         hapcount++
-    }   # non-duplicate haplotype names
+    }
 
-    # add haplotype name to segment
+    # Add genome to segment sources
     for (i in a) {
         sid = substr(a[i], 1, length(a[i]) - 1)
         if (sid in harr) {
             harr[sid] = harr[sid] "," n
         } else {
             harr[sid] = n
-        }   # NOTE: simply add on, may contain duplicates
+        }
     }
 
     # add tip node
@@ -90,8 +103,14 @@ BEGIN {
         print end, "tail" >> edgefp
     }
 
-    # extract haplotype name
-    n = $2 "." $3
+    # Extract genome info from W-line
+    # W-line format: W <sample> <haplotype_index> <seq_name> ...
+    # Genome key format: "sample:haplotype_index:haplotype_origin"
+    sample = $2
+    haplotype = $3
+    origin = "provided"
+    n = sample ":" haplotype ":" origin
+
     for (i = 2; i in a; i++) {
         if (a[i] in harr) {
             harr[a[i]] = harr[a[i]] "," n
