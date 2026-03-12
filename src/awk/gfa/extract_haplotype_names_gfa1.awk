@@ -6,17 +6,29 @@ BEGIN {
 
 /^P/ {
     resolved = parse_pansn_str($2, pa)
-    if (!resolved) {
-        next
+    if (resolved) {
+        sample = pa[1]
+        haplotype = pa[2]
+    } else if (index($2, "#")) {
+        split($2, parts, "#")
+        sample = parts[1]
+        haplotype = "0"
+    } else if (index($2, ".")) {
+        split($2, parts, ".")
+        sample = parts[1]
+        haplotype = "0"
+    } else {
+        sample = $2
+        haplotype = "0"
     }
-    n = pa[1] "." pa[2]
+    n = sample "#" haplotype
     if (!(n in haplos)) {
         haplos[n]
     }
 }
 
 /^W/ { 
-    n = $2 "." $3
+    n = $2 "#" $3
     if (!(n in haplos)) {
         haplos[n]
     }

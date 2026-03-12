@@ -1,7 +1,6 @@
 ##gff-version 3
 ##sequence-region chr1 1 88
-# Annotations for smp1 on sequence '1'
-# Import with: hap annotation add --file smp1.annotations.gff3 --genome-name smp1 --haplotype-index 0
+# Annotations for smp1 on chromosome 'chr1'
 chr1	manual	gene	5	45	.	+	.	ID=gene001;Name=TEST_GENE_1;description=Test gene spanning multiple segments
 chr1	manual	mRNA	5	45	.	+	.	ID=mRNA001;Parent=gene001;Name=TEST_GENE_1.1
 chr1	manual	exon	5	15	.	+	.	ID=exon001;Parent=mRNA001

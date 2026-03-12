@@ -146,7 +146,7 @@ GROUP BY p.name;
 - [x] **GFA path validation integrated** - Path验证已集成到build过程
 - [x] **Path-segment coordinate generation** - 已实现，在build过程中生成
 - [x] **Annotation parsers** - GFF3, GTF, BED解析器已实现
-- [ ] **`build` command `--annotations` parameter** - 可选功能，未实现
+- [x] **`build` command `--annotations` parameter** - 已取消（改用 `hap annotation add`）
 - [x] **`annotation` command fully functional** - add, get, edit, delete, export都已实现
 - [x] **Coordinate mapping working** - seqid→subgraph+genome→path映射正常
 - [x] **Mock annotation data created** - 已创建多格式测试数据
@@ -233,9 +233,9 @@ UPDATE subgraph SET name = 'chr1' WHERE name = '' OR name IS NULL;
 **优先级**: 低（可在后续迭代中修复）
 
 ### 3. Build --annotations参数
-**状态**: 未实现
+**状态**: 已取消
 
-**说明**: 这是可选功能，允许在build时直接导入注释。当前可通过build后使用`annotation add`达到相同效果。
+**说明**: 不再支持build时直接导入注释，请使用`annotation add`进行导入。
 
 ## 后续工作建议
 
@@ -250,7 +250,7 @@ UPDATE subgraph SET name = 'chr1' WHERE name = '' OR name IS NULL;
 6. **增强query命令**: 要求至少指定一个scope参数
 
 ### 低优先级
-7. **Build --annotations参数**: 实现build时直接导入注释
+7. **Build --annotations参数**: 已取消（使用`annotation add`）
 8. **性能优化**: 大文件导入的批处理优化
 9. **文档完善**: 添加更多使用示例和最佳实践
 

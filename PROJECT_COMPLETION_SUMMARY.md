@@ -162,7 +162,7 @@ Checking against original plan requirements:
 - [x] **GFA path validation integrated** ✅
 - [x] **Path-segment coordinate generation** ✅
 - [x] **Annotation parsers (GFF3, GTF, BED)** ✅
-- [ ] **`build` command `--annotations` parameter** ⏸️ (Optional, not critical)
+- [x] **`build` command `--annotations` parameter** ⛔ (Removed; use `hap annotation add`)
 - [x] **`annotation` command fully functional** ✅
 - [x] **Coordinate mapping working** ✅
 - [x] **Mock annotation data created** ✅
@@ -258,8 +258,7 @@ hap annotation export --subgraph chr1 --format bed --output chr1.bed
 ### Future Enhancements
 
 1. **Build-time Import** (`--annotations` flag)
-   - Priority: Low
-   - Current workaround: Import post-build with `annotation add`
+   - Status: Removed (use `annotation add`)
 
 2. **Unit Tests**
    - Priority: Medium
@@ -313,7 +312,7 @@ hap annotation export --subgraph chr1 --format bed --output chr1.bed
    - Implement query result pagination
 
 2. **Medium Priority**
-   - Build `--annotations` parameter
+   - Build-time annotation import removed (use `annotation add`)
    - Bulk edit operations
    - Annotation comparison tools
 

@@ -50,8 +50,8 @@ class Segment:
         # Relations
         # self.region = None
         self.sub_regions: list[str] = []
-        self.sources: list[str] = []
-        # self.source_coordinates: dict[str, list[int]] = {}  # Optional, currently muted
+        self.paths: list[str] = []
+        # self.path_coordinates: dict[str, list[int]] = {}  # Optional, currently muted
 
     def to_dict(self) -> dict[str, Any]:
         """
@@ -101,7 +101,7 @@ class Region:
         self.segments: list[str] = []
 
         # Utilities
-        self.sources: list[str] = []
+        self.paths: list[str] = []
         self.min_length = 0
         self.before = None
         self.after = None
@@ -109,7 +109,7 @@ class Region:
     def add_segment(self, id: str, original: bool = False):
         """
         Create and add segment to current region, setting the same
-        `level_range`, `sources`, and return the created segment.
+        `level_range`, `paths`, and return the created segment.
         If region `type` is `con` and no segment exists, added segment
         is set to default.
 
@@ -123,7 +123,7 @@ class Region:
         segment = Segment(id, original)
         self.segments.append(segment.id)
         segment.level_range = self.level_range
-        segment.sources = self.sources
+        segment.paths = self.paths
         return segment
 
     def to_dict(self) -> dict[str, Any]:

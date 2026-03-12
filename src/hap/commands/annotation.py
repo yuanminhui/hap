@@ -66,7 +66,7 @@ class GFF3Parser:
                         f"Line {line_num}: GFF3 requires 9 tab-delimited fields, got {len(parts)}"
                     )
 
-                seqid, source, feature_type, start_str, end_str, score_str, strand, phase_str, attr_str = parts
+                seqid, gff_source, feature_type, start_str, end_str, score_str, strand, phase_str, attr_str = parts
 
                 # Parse coordinates: GFF3 is 1-based, inclusive → convert to 0-based, half-open
                 try:
@@ -97,7 +97,7 @@ class GFF3Parser:
 
                 annotations.append({
                     "seqid": seqid,
-                    "source": source,
+                    "source": gff_source,
                     "type": feature_type,
                     "start": start_0based,
                     "end": end_0based,
@@ -168,7 +168,7 @@ class GTFParser:
                         f"Line {line_num}: GTF requires 9 tab-delimited fields, got {len(parts)}"
                     )
 
-                seqname, source, feature_type, start_str, end_str, score_str, strand, frame_str, attr_str = parts
+                seqname, gff_source, feature_type, start_str, end_str, score_str, strand, frame_str, attr_str = parts
 
                 # Parse coordinates: GTF is 1-based, inclusive → convert to 0-based
                 try:
@@ -199,7 +199,7 @@ class GTFParser:
 
                 annotations.append({
                     "seqid": seqname,
-                    "source": source,
+                    "source": gff_source,
                     "type": feature_type,
                     "start": start_0based,
                     "end": end_0based,
@@ -404,13 +404,15 @@ class AnnotationMapper:
 
         query = """
             SELECT
-                segment_id,
-                segment_order,
-                lower(coordinate) as seg_start,
-                upper(coordinate) as seg_end
-            FROM path_segment_coordinate
-            WHERE path_id = %s
-            ORDER BY segment_order;
+                psc.segment_id,
+                psc.segment_order,
+                lower(psc.coordinate) as seg_start,
+                upper(psc.coordinate) as seg_end
+            FROM path_segment_coordinate psc
+            JOIN segment_original_id so
+              ON so.id = psc.segment_id
+            WHERE psc.path_id = %s
+            ORDER BY psc.segment_order;
         """
 
         with self.connection.cursor() as cur:
@@ -476,14 +478,16 @@ class AnnotationMapper:
         """Map using direct query (fallback for single annotations)."""
         query = """
             SELECT
-                segment_id,
-                segment_order,
-                lower(coordinate) as seg_path_start,
-                upper(coordinate) as seg_path_end
-            FROM path_segment_coordinate
-            WHERE path_id = %s
-              AND coordinate && int8range(%s, %s)
-            ORDER BY segment_order;
+                psc.segment_id,
+                psc.segment_order,
+                lower(psc.coordinate) as seg_path_start,
+                upper(psc.coordinate) as seg_path_end
+            FROM path_segment_coordinate psc
+            JOIN segment_original_id so
+              ON so.id = psc.segment_id
+            WHERE psc.path_id = %s
+              AND psc.coordinate && int8range(%s, %s)
+            ORDER BY psc.segment_order;
         """
 
         with self.connection.cursor() as cur:
@@ -552,15 +556,16 @@ def import_annotations(
     filepath: str,
     format_type: str,
     genome_name: str,
-    haplotype_index: Optional[int] = None,
+    haplotype_id: Optional[int] = None,
     subgraph_name: Optional[str] = None,
+    pangenome_id: Optional[int] = None,
 ) -> int:
     """Import annotations from file into database.
 
     Core Logic:
     - Annotation file seqid = subgraph.name (e.g., "chr1", "1")
     - Must specify genome_name to identify which genome's paths to use
-    - haplotype_index is optional: if not provided, auto-select first available (0, 1, 2, ...)
+    - haplotype_id is optional: if not provided, auto-select first available (0, 1, 2, ...)
 
     Pipeline:
     1. Resolve genome_id (auto-select haplotype if needed)
@@ -573,49 +578,90 @@ def import_annotations(
         connection: Database connection
         filepath: Path to annotation file
         format_type: "gff3", "gtf", or "bed"
-        genome_name: Genome name (required, e.g., "hap1", "HG002")
-        haplotype_index: Haplotype index (optional, auto-select if None)
+        genome_name: Genome key (required, e.g., "hap1" or "HG002#1")
+        haplotype_id: Haplotype id (optional, auto-select if None)
         subgraph_name: Filter to specific subgraph (optional)
 
     Returns:
         Number of annotations imported
 
     Example:
-        import_annotations(conn, "anno.gff3", "gff3", genome_name="HG002", haplotype_index=1)
+        import_annotations(conn, "anno.gff3", "gff3", genome_name="HG002", haplotype_id=1)
         import_annotations(conn, "anno.gff3", "gff3", genome_name="HG002")  # auto-select haplotype
     """
 
     # Step 1: Resolve genome_id
     cursor = connection.cursor()
 
-    if haplotype_index is not None:
-        # Explicit haplotype_index provided
+    sample_name = genome_name
+    parsed_haplotype_id = None
+    if ":" in genome_name:
+        parts = genome_name.split(":")
+        if len(parts) >= 2:
+            sample_name = parts[0]
+            try:
+                parsed_haplotype_id = int(parts[1])
+            except ValueError:
+                parsed_haplotype_id = None
+    elif "#" in genome_name:
+        sample_name, hap_str = genome_name.rsplit("#", 1)
+        try:
+            parsed_haplotype_id = int(hap_str)
+        except ValueError:
+            parsed_haplotype_id = None
+    elif "." in genome_name:
+        sample_name, hap_str = genome_name.rsplit(".", 1)
+        try:
+            parsed_haplotype_id = int(hap_str)
+        except ValueError:
+            parsed_haplotype_id = None
+
+    if haplotype_id is not None and parsed_haplotype_id is not None and haplotype_id != parsed_haplotype_id:
+        raise DataInvalidError(
+            f"Conflicting haplotype_id values: '{genome_name}' implies {parsed_haplotype_id}, "
+            f"but haplotype_id={haplotype_id} was provided."
+        )
+
+    if haplotype_id is None:
+        haplotype_id = parsed_haplotype_id
+
+    cursor.execute(
+        "SELECT id FROM sample WHERE name = %s",
+        (sample_name,),
+    )
+    result = cursor.fetchone()
+    if not result:
+        raise DataInvalidError(f"No sample found with name='{sample_name}'")
+    sample_id = result[0]
+
+    if haplotype_id is not None:
+        # Explicit haplotype_id provided
         cursor.execute(
-            "SELECT id FROM genome WHERE name = %s AND haplotype_index = %s",
-            (genome_name, haplotype_index)
+            "SELECT id FROM genome WHERE sample_id = %s AND haplotype_id = %s",
+            (sample_id, haplotype_id),
         )
         result = cursor.fetchone()
         if not result:
             raise DataInvalidError(
-                f"Genome not found: name='{genome_name}', haplotype_index={haplotype_index}"
+                f"Genome not found: sample='{sample_name}', haplotype_id={haplotype_id}"
             )
         genome_id = result[0]
-        resolved_haplotype_index = haplotype_index
+        resolved_haplotype_id = haplotype_id
     else:
-        # Auto-select: find first available haplotype (0, 1, 2, ...)
+        # Auto-select: find first available haplotype_id (0, 1, 2, ...)
         cursor.execute(
-            """SELECT id, haplotype_index FROM genome
-               WHERE name = %s
-               ORDER BY haplotype_index
+            """SELECT id, haplotype_id FROM genome
+               WHERE sample_id = %s
+               ORDER BY haplotype_id
                LIMIT 1""",
-            (genome_name,)
+            (sample_id,),
         )
         result = cursor.fetchone()
         if not result:
-            raise DataInvalidError(f"No genome found with name='{genome_name}'")
-        genome_id, resolved_haplotype_index = result
+            raise DataInvalidError(f"No genome found with sample='{sample_name}'")
+        genome_id, resolved_haplotype_id = result
         import click
-        click.echo(f"Auto-selected haplotype_index={resolved_haplotype_index} for genome '{genome_name}'")
+        click.echo(f"Auto-selected haplotype_id={resolved_haplotype_id} for sample '{sample_name}'")
 
     # Step 2: Parse annotation file
     if format_type == "gff3":
@@ -645,33 +691,53 @@ def import_annotations(
             continue
 
         # Find path: subgraph.name=seqid AND genome_id=genome_id
-        query_path = """
-            SELECT p.id, p.name, p.subgraph_id, s.name as subgraph_name
-            FROM path p
-            JOIN subgraph s ON p.subgraph_id = s.id
-            WHERE s.name = %s AND p.genome_id = %s
-        """
-        cursor.execute(query_path, (seqid, genome_id))
+        # If pangenome_id is specified, restrict to that pangenome
+        if pangenome_id:
+            query_path = """
+                SELECT p.id, p.subgraph_id, sg.name as subgraph_name
+                FROM path p
+                JOIN subgraph sg ON p.subgraph_id = sg.id
+                WHERE sg.name = %s AND p.genome_id = %s AND sg.pangenome_id = %s
+            """
+            cursor.execute(query_path, (seqid, genome_id, pangenome_id))
+        else:
+            query_path = """
+                SELECT p.id, p.subgraph_id, sg.name as subgraph_name
+                FROM path p
+                JOIN subgraph sg ON p.subgraph_id = sg.id
+                WHERE sg.name = %s AND p.genome_id = %s
+            """
+            cursor.execute(query_path, (seqid, genome_id))
         result = cursor.fetchone()
 
         if not result:
             # List available subgraphs for this genome
-            cursor.execute(
-                """SELECT DISTINCT s.name
-                   FROM subgraph s
-                   JOIN path p ON s.id = p.subgraph_id
-                   WHERE p.genome_id = %s
-                   ORDER BY s.name""",
-                (genome_id,)
-            )
+            if pangenome_id:
+                cursor.execute(
+                    """SELECT DISTINCT sg.name
+                       FROM subgraph sg
+                       JOIN path p ON sg.id = p.subgraph_id
+                       WHERE p.genome_id = %s AND sg.pangenome_id = %s
+                       ORDER BY sg.name""",
+                    (genome_id, pangenome_id)
+                )
+            else:
+                cursor.execute(
+                    """SELECT DISTINCT sg.name
+                       FROM subgraph sg
+                       JOIN path p ON sg.id = p.subgraph_id
+                       WHERE p.genome_id = %s
+                       ORDER BY sg.name""",
+                    (genome_id,)
+                )
             available = [row[0] for row in cursor.fetchall()]
 
             raise DataInvalidError(
-                f"Path not found for seqid '{seqid}' with genome '{genome_name}' haplotype {resolved_haplotype_index}.\n"
+                f"Path not found for seqid '{seqid}' with genome '{sample_name}' haplotype {resolved_haplotype_id}.\n"
                 f"Available subgraphs for this genome: {available}"
             )
 
-        path_id, path_name, subgraph_id, subgraph_name_db = result
+        path_id, subgraph_id, subgraph_name_db = result
 
         # Import annotations for this seqid to the found path
         count = _import_to_single_path_helper(
@@ -681,8 +747,8 @@ def import_annotations(
 
         import click
         click.echo(
-            f"  Imported {count} annotations: seqid '{seqid}' → path '{path_name}' "
-            f"(genome: {genome_name}#{resolved_haplotype_index})"
+            f"  Imported {count} annotations: seqid '{seqid}' → subgraph '{subgraph_name_db}' "
+            f"(genome: {sample_name}#{resolved_haplotype_id})"
         )
 
     return total_imported
@@ -702,13 +768,10 @@ def _import_to_single_path_helper(
 
     # Get starting IDs
     next_annotation_id = db.get_next_id_from_table(connection, "annotation")
-    next_span_id = db.get_next_id_from_table(connection, "annotation_span")
-
     annotation_id_counter = next_annotation_id
-    span_id_counter = next_span_id
 
-    source_map = {"gff3": "GFF3", "gtf": "GTF", "bed": "BED"}
-    source = source_map.get(format_type, format_type.upper())
+    gff_source_map = {"gff3": "GFF3", "gtf": "GTF", "bed": "BED"}
+    gff_source = gff_source_map.get(format_type, format_type.upper())
 
     for ann in annotations:
         # Map annotation to segments
@@ -737,7 +800,7 @@ def _import_to_single_path_helper(
             "type": ann_type,
             "label": label,
             "strand": ann.get("strand", "."),
-            "source": source,
+            "source": gff_source,
             "score": ann.get("score"),
             "attributes": attrs,
             "genome_id": genome_id,
@@ -746,13 +809,11 @@ def _import_to_single_path_helper(
         # Create annotation_span records
         for span_order, seg in enumerate(segments):
             annotation_span_records.append({
-                "id": span_id_counter,
                 "annotation_id": annotation_id_counter,
                 "segment_id": seg["segment_id"],
                 "coordinate": f"[{seg['segment_start']},{seg['segment_end']})",
                 "span_order": span_order,
             })
-            span_id_counter += 1
 
         annotation_id_counter += 1
 
@@ -778,11 +839,11 @@ def _import_to_single_path_helper(
 
         # Insert annotation_spans
         span_query = """
-            INSERT INTO annotation_span (id, annotation_id, segment_id, coordinate, span_order)
-            VALUES (%s, %s, %s, %s, %s);
+            INSERT INTO annotation_span (annotation_id, segment_id, coordinate, span_order)
+            VALUES (%s, %s, %s, %s);
         """
         span_values = [
-            (rec["id"], rec["annotation_id"], rec["segment_id"], rec["coordinate"], rec["span_order"])
+            (rec["annotation_id"], rec["segment_id"], rec["coordinate"], rec["span_order"])
             for rec in annotation_span_records
         ]
         cur.executemany(span_query, span_values)
@@ -816,7 +877,6 @@ def query_annotations(
             a.id,
             a.subgraph_id,
             a.path_id,
-            p.name as path_name,
             lower(a.coordinate) as start,
             upper(a.coordinate) as end,
             a.type,
@@ -901,17 +961,16 @@ def query_annotations(
             "id": row[0],
             "subgraph_id": row[1],
             "path_id": row[2],
-            "path_name": row[3],
-            "start": row[4],
-            "end": row[5],
-            "type": row[6],
-            "label": row[7],
-            "strand": row[8],
-            "source": row[9],
-            "score": row[10],
-            "attributes": row[11],
-            "genome_id": row[12],
-            "genome_name": row[13],
+            "start": row[3],
+            "end": row[4],
+            "type": row[5],
+            "label": row[6],
+            "strand": row[7],
+            "source": row[8],
+            "score": row[9],
+            "attributes": row[10],
+            "genome_id": row[11],
+            "genome_name": row[12],
         })
 
     return results
@@ -941,7 +1000,7 @@ def format_annotations(
         lines = ["id\tpath\tstart\tend\ttype\tlabel\tstrand\tscore"]
         for ann in annotations:
             lines.append(
-                f"{ann['id']}\t{ann['path_name']}\t{ann['start']}\t{ann['end']}\t"
+                f"{ann['id']}\t{ann['genome_name']}\t{ann['start']}\t{ann['end']}\t"
                 f"{ann['type']}\t{ann['label'] or '.'}\t{ann['strand']}\t{ann['score'] or '.'}"
             )
         return lines
@@ -968,7 +1027,7 @@ def format_annotations(
             end_1based = ann["end"]
 
             lines.append(
-                f"{ann['path_name']}\t{ann['source']}\t{ann['type']}\t"
+                f"{ann['genome_name']}\t{ann['source']}\t{ann['type']}\t"
                 f"{start_1based}\t{end_1based}\t{ann['score'] or '.'}\t"
                 f"{ann['strand']}\t.\t{attr_str}"
             )
@@ -993,7 +1052,7 @@ def format_annotations(
             end_1based = ann["end"]
 
             lines.append(
-                f"{ann['path_name']}\t{ann['source']}\t{ann['type']}\t"
+                f"{ann['genome_name']}\t{ann['source']}\t{ann['type']}\t"
                 f"{start_1based}\t{end_1based}\t{ann['score'] or '.'}\t"
                 f"{ann['strand']}\t.\t{attr_str}"
             )
@@ -1005,7 +1064,7 @@ def format_annotations(
         lines = []
         for ann in annotations:
             lines.append(
-                f"{ann['path_name']}\t{ann['start']}\t{ann['end']}\t"
+                f"{ann['genome_name']}\t{ann['start']}\t{ann['end']}\t"
                 f"{ann['label'] or ann['type']}\t{ann['score'] or 0}\t{ann['strand']}"
             )
         return lines
@@ -1032,12 +1091,14 @@ annotation = main
     "--genome-name",
     type=str,
     required=True,
-    help="Genome name (sample name, e.g., 'hap1', 'HG002')",
+    help="Genome key (sample or sample#haplotype_id, e.g., 'hap1', 'HG002#1')",
 )
 @click.option(
+    "--haplotype-id",
     "--haplotype-index",
+    "haplotype_id",
     type=int,
-    help="Haplotype index (0, 1, 2, ...). If not specified, auto-selects first available.",
+    help="Haplotype id (0, 1, 2, ...). If not specified, auto-selects first available.",
 )
 @click.option(
     "--subgraph",
@@ -1057,7 +1118,7 @@ annotation = main
 )
 def add_annotation(
     genome_name: str,
-    haplotype_index: Optional[int],
+    haplotype_id: Optional[int],
     subgraph: Optional[str],
     file: str,
     format: Optional[str],
@@ -1068,14 +1129,14 @@ def add_annotation(
     You must specify which genome these annotations belong to.
 
     Examples:
-        # Import with explicit haplotype index
-        hap annotation add --file anno.gff3 --genome-name HG002 --haplotype-index 1
+        # Import with explicit haplotype id
+        hap annotation add --file anno.gff3 --genome-name HG002 --haplotype-id 1
 
-        # Auto-select haplotype (uses first available, e.g., haplotype_index=0)
+        # Auto-select haplotype (uses first available, e.g., haplotype_id=0)
         hap annotation add --file anno.gff3 --genome-name hap1
 
         # Import only specific subgraph from multi-chromosome file
-        hap annotation add --file anno.gff3 --genome-name HG002 --haplotype-index 1 --subgraph chr1
+        hap annotation add --file anno.gff3 --genome-name HG002 --haplotype-id 1 --subgraph chr1
 
     Note:
         - seqid in annotation file = subgraph.name (e.g., "chr1", "1")
@@ -1094,7 +1155,7 @@ def add_annotation(
                 filepath=file,
                 format_type=format.lower(),
                 genome_name=genome_name,
-                haplotype_index=haplotype_index,
+                haplotype_id=haplotype_id,
                 subgraph_name=subgraph,
             )
             click.echo(f"Successfully imported {num_imported} annotations")
@@ -1285,7 +1346,7 @@ def delete_annotation(
             if not confirm:
                 click.echo(f"Found {len(annotations)} annotation(s) to delete:")
                 for ann in annotations[:10]:  # Show first 10
-                    click.echo(f"  ID {ann['id']}: {ann['label']} ({ann['type']}) on {ann['path_name']}")
+                    click.echo(f"  ID {ann['id']}: {ann['label']} ({ann['type']}) on {ann['genome_name']}")
                 if len(annotations) > 10:
                     click.echo(f"  ... and {len(annotations) - 10} more")
 
@@ -1366,4 +1427,3 @@ def export_annotation(
             conn.rollback()
             click.echo(f"Error exporting annotations: {e}", err=True)
             raise
-

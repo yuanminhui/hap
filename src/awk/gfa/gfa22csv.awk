@@ -2,7 +2,8 @@
 
 BEGIN {
     FS = OFS = "\t"
-    hapcount = 0
+    genome_count = 0
+    pathcount = 0
 }
 
 # extract node id and length
@@ -40,23 +41,51 @@ BEGIN {
         print end, "tail" >> edgefp
     }
 
-    # extract haplotype name
-    resolved = parse_pansn_str($2, pa)
-    if (!resolved) {
-        next
+    path_name = $2
+    if (!(path_name in paths)) {
+        paths[path_name]
+        pathcount++
+        path_list[pathcount] = path_name
     }
-    n = pa[1] "#" pa[2]  # Use # separator per PanSN specification
+
+    # Extract genome info from path name
+    # Output format for genomes: "sample:haplotype_id:hap_origin"
+    resolved = parse_pansn_str($2, pa)
+    if (resolved) {
+        sample = pa[1]
+        haplotype_id = pa[2]
+        hap_origin = "parsed"
+    } else if (index($2, "#")) {
+        split($2, parts, "#")
+        sample = parts[1]
+        haplotype_id = "0"
+        hap_origin = "assumed"
+    } else if (index($2, ".")) {
+        split($2, parts, ".")
+        sample = parts[1]
+        haplotype_id = "0"
+        hap_origin = "assumed"
+    } else {
+        sample = $2
+        haplotype_id = "0"
+        hap_origin = "assumed"
+    }
+    genome_key = sample ":" haplotype_id ":" hap_origin
     for (i in a) {
         sid = substr(a[i], 1, length(a[i]) - 1)
-        if (sid in harr) {
-            harr[sid] = harr[sid] "," n
-        } else {
-            harr[sid] = n
-        }   # NOTE: simply add on, may contain duplicates
+        key = sid SUBSEP path_name
+        if (!(key in seg_path_seen)) {
+            seg_path_seen[key] = 1
+            if (sid in seg_paths) {
+                seg_paths[sid] = seg_paths[sid] "," path_name
+            } else {
+                seg_paths[sid] = path_name
+            }
+        }
     }
-    if (!(n in haplos)) {
-        haplos[n]
-        hapcount++
+    if (!(genome_key in genome_keys)) {
+        genome_keys[genome_key]
+        genome_count++
     }   # non-duplicate haplotype names
 }
 
@@ -83,39 +112,86 @@ BEGIN {
         print end, "tail" >> edgefp
     }
 
-    # extract haplotype name
-    resolved = parse_pansn_str($2, pa)
-    if (!resolved) {
-        next
+    path_name = $2
+    if (!(path_name in paths)) {
+        paths[path_name]
+        pathcount++
+        path_list[pathcount] = path_name
     }
-    n = pa[1] "#" pa[2]  # Use # separator per PanSN specification
+
+    # Extract genome info from path name
+    # Output format for genomes: "sample:haplotype_id:hap_origin"
+    resolved = parse_pansn_str($2, pa)
+    if (resolved) {
+        sample = pa[1]
+        haplotype_id = pa[2]
+        hap_origin = "parsed"
+    } else if (index($2, "#")) {
+        split($2, parts, "#")
+        sample = parts[1]
+        haplotype_id = "0"
+        hap_origin = "assumed"
+    } else if (index($2, ".")) {
+        split($2, parts, ".")
+        sample = parts[1]
+        haplotype_id = "0"
+        hap_origin = "assumed"
+    } else {
+        sample = $2
+        haplotype_id = "0"
+        hap_origin = "assumed"
+    }
+    genome_key = sample ":" haplotype_id ":" hap_origin
     for (i in a) {
         sid = a[i]
-        if (sid in harr) {
-            harr[sid] = harr[sid] "," n
-        } else {
-            harr[sid] = n
+        key = sid SUBSEP path_name
+        if (!(key in seg_path_seen)) {
+            seg_path_seen[key] = 1
+            if (sid in seg_paths) {
+                seg_paths[sid] = seg_paths[sid] "," path_name
+            } else {
+                seg_paths[sid] = path_name
+            }
         }
     }
-    if (!(n in haplos)) {
-        haplos[n]
-        hapcount++
+    if (!(genome_key in genome_keys)) {
+        genome_keys[genome_key]
+        genome_count++
     }
 }
 
 # print nodes and info
 END {
     for (id in larr) {
-        c = gsub(",", ",", harr[id]) + 1
-        print id, larr[id], c / hapcount, harr[id] >> nodefp
+        if (seg_paths[id] == "") {
+            c = 0
+        } else {
+            c = gsub(",", ",", seg_paths[id]) + 1
+        }
+        if (pathcount > 0) {
+            freq = c / pathcount
+        } else {
+            freq = 0
+        }
+        print id, larr[id], freq, seg_paths[id] >> nodefp
     }
 
-    for (haplotype in haplos) {
-        if (hapstr == "") {
-            hapstr = haplotype
+    for (genome_key in genome_keys) {
+        if (genome_str == "") {
+            genome_str = genome_key
         } else {
-            hapstr = hapstr "," haplotype
+            genome_str = genome_str "," genome_key
         }
     }
-    print "haplotypes", hapstr >> infofp
+    print "genomes", genome_str >> infofp
+
+    for (i = 1; i <= pathcount; i++) {
+        if (path_str == "") {
+            path_str = path_list[i]
+        } else {
+            path_str = path_str "," path_list[i]
+        }
+    }
+    print "paths", path_str >> infofp
+    print "paths_total", pathcount >> infofp
 }

@@ -27,7 +27,7 @@
       "name": "build_command_extension",
       "type": "command",
       "files": ["src/hap/commands/build.py"],
-      "description": "Add --annotations parameter and path processing"
+      "description": "Path processing only (build-time annotation import removed)"
     },
     {
       "name": "annotation_command",
@@ -279,21 +279,11 @@
       "command": "hap build run",
       "file": "src/hap/commands/build.py",
       "function": "run",
-      "new_parameters": [
-        {
-          "name": "--annotations",
-          "type": "Path",
-          "multiple": true,
-          "help": "Annotation files to import (GFF3/GTF/BED)",
-          "position": "after --sequence-file"
-        }
-      ],
+      "new_parameters": [],
       "changes": [
         "Add GFA path line existence validation (not segment associations)",
         "Generate path and path_segment_coordinate during graph2rstree()",
-        "Import annotations after hap2db() if --annotations provided",
-        "Validate annotation file path names exist in target HAP",
-        "Convert GFF3/GTF coordinates from 1-based to 0-based"
+        "Build-time annotation import removed; use annotation add"
       ]
     }
   ],
@@ -511,8 +501,7 @@
         "Implement AnnotationImporter.validate_target() (check hap/path exists)",
         "Implement AnnotationImporter.import_file() orchestration",
         "Implement AnnotationImporter.bulk_insert() for performance",
-        "Add --annotations parameter to build command",
-        "Implement annotation import in build workflow",
+        "Build-time annotation import removed; use annotation add",
         "Create annotation add subcommand",
         "Add validation for annotation coordinates vs path length",
         "Add error handling and progress reporting"
@@ -557,7 +546,7 @@
     {
       "phase": "10-integration-testing",
       "tasks": [
-        "Test build with --annotations (import during build)",
+        "Confirm build no longer imports annotations; use annotation add",
         "Test annotation add (post-build import)",
         "Test complex queries (range overlap, regex, multi-filter)",
         "Test annotation edit and delete",

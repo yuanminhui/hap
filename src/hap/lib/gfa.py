@@ -34,7 +34,7 @@ class GFA:
         contains_length(self) -> bool: Check if the GFA file contains length record.
         is_valid(self) -> bool: Check if the GFA file is valid.
         can_extract_length(self) -> bool: Check if the GFA file can extract length from sequence record.
-        get_haplotypes(self) -> list[str]: Get the haplotypes from the GFA file.
+        get_genome_names(self) -> list[str]: Get genome names from the GFA file.
         separate_sequence(self, output_dir: str): Move the sequences in segment records to `{basename}.seq.tsv`, leaving a `*` as placeholder, add `LN` tag if not exist, and return the file paths of the modified GFA file and the sequence file (if exists).
         ensure_length_completeness(self): Ensure all `S` records have length info: for GFA 1.x this means `LN` is present; for GFA 2.x length field exists by spec.
         extract_subgraph_names(self, chr_only: bool = True) -> list[str]: Extract the names of subgraphs from the GFA file.
@@ -262,14 +262,18 @@ class GFA:
         - Empty path name handling
 
         Args:
-            path_genome_map: Optional explicit mapping from path_name to genome_name.
+            path_genome_map: Optional explicit mapping from path_name to genome key
+                (e.g., "sample#1" or "sample:1:provided").
                 Overrides convention-based parsing for matched paths.
 
         Returns:
             list[dict]: List of path dictionaries with keys:
                 - name: path name (str)
                 - walk: list of segment_id strings (all forward orientation)
-                - genome_name: genome/sample name (str)
+                - sample: sample name (str)
+                - haplotype_id: haplotype index/id (int)
+                - hap_origin: haplotype origin (provided/parsed/assumed)
+                - genome_name: display name "sample#haplotype_id" (str)
 
         Raises:
             DataInvalidError: If no paths found, genome resolution fails,
@@ -307,21 +311,40 @@ class GFA:
                 "Paths are required for building the pangenome."
             )
 
-        # Parse AWK output (format: path_name\tgenome_name\tnormalized_walk)
+        # Parse AWK output (format: path_name\tsample\thaplotype_id\thap_origin\tnormalized_walk)
         paths = []
         errors = []
 
         for line in res.stdout.splitlines():
             parts = line.split("\t")
-            if len(parts) < 3:
+            if len(parts) < 5:
                 continue
 
-            path_name, genome_name, normalized_walk = parts[0], parts[1], parts[2]
+            path_name = parts[0]
+            sample = parts[1]
+            haplotype_id_str = parts[2]
+            hap_origin = parts[3]
+            normalized_walk = parts[4]
 
             # Apply explicit mapping if provided (overrides convention parsing)
             if path_genome_map is not None:
                 if path_name in path_genome_map:
-                    genome_name = path_genome_map[path_name]
+                    mapped_key = path_genome_map[path_name]
+                    if ":" in mapped_key:
+                        key_parts = mapped_key.split(":")
+                        sample = key_parts[0]
+                        haplotype_id_str = key_parts[1] if len(key_parts) > 1 else "0"
+                        hap_origin = key_parts[2] if len(key_parts) > 2 else "provided"
+                    elif "#" in mapped_key:
+                        sample, haplotype_id_str = mapped_key.rsplit("#", 1)
+                        hap_origin = "provided"
+                    elif "." in mapped_key:
+                        sample, haplotype_id_str = mapped_key.rsplit(".", 1)
+                        hap_origin = "provided"
+                    else:
+                        sample = mapped_key
+                        haplotype_id_str = "0"
+                        hap_origin = "provided"
                 else:
                     errors.append(
                         f"Path '{path_name}' not found in provided path_genome_map. "
@@ -330,16 +353,24 @@ class GFA:
                     continue
 
             # Check for genome resolution errors from AWK
-            if genome_name.startswith("ERROR:"):
-                if genome_name == "ERROR:EMPTY":
+            if sample.startswith("ERROR:"):
+                if sample == "ERROR:EMPTY":
                     errors.append(f"Path '{path_name}' has empty name in GFA file.")
                 else:
-                    orig_path = genome_name[6:]  # Remove "ERROR:" prefix
+                    orig_path = sample[6:]  # Remove "ERROR:" prefix
                     errors.append(
                         f"Cannot resolve genome name for path '{orig_path}'. "
                         "Either provide path_genome_map or use naming convention "
-                        "like 'sample#chr1' or 'sample.chr1'."
+                        "like 'sample#hap#seq' or 'sample#seq'."
                     )
+                continue
+
+            try:
+                haplotype_id = int(haplotype_id_str) if haplotype_id_str else 0
+            except ValueError:
+                errors.append(
+                    f"Invalid haplotype_id '{haplotype_id_str}' for path '{path_name}'."
+                )
                 continue
 
             # Parse normalized walk (simple space-separated segment IDs)
@@ -349,7 +380,10 @@ class GFA:
             paths.append({
                 "name": path_name,
                 "walk": walk,
-                "genome_name": genome_name,
+                "sample": sample,
+                "haplotype_id": haplotype_id,
+                "hap_origin": hap_origin,
+                "genome_name": f"{sample}#{haplotype_id}",
             })
 
         if errors:
@@ -467,13 +501,15 @@ class GFA:
                 "Provide sequences for these IDs or include LN:i:<len> in GFA."
             )
 
-    def get_haplotypes(self) -> list[str]:
-        """Get the haplotypes from the GFA file. Haplotypes are extracted from
-        the `P` lines in GFA 1.0, and the `O` and `U` lines in GFA 2.0, by
-        path IDs that conform PanSN naming convention.
+    def get_genome_names(self) -> list[str]:
+        """Get genome names from the GFA file.
+
+        Genome names are extracted from the `P` lines in GFA 1.0, and the `O`
+        and `U` lines in GFA 2.0, by path IDs that conform PanSN naming
+        convention.
 
         Returns:
-            list[str]: The names of haplotypes.
+            list[str]: The genome names (sample#haplotype_id).
         """
 
         if not self.contains_path():
@@ -498,8 +534,9 @@ class GFA:
         res = subprocess.run(cmd, text=True, capture_output=True)
         if res.returncode == 0:
             return res.stdout.splitlines()
-        elif res.returncode == 1:
+        if res.returncode == 1:
             return []
+        return []
 
     def separate_sequence(self, output_dir: str = None):
         """
@@ -777,7 +814,7 @@ class GFA:
 
         # `sed` -- Add table headers
         sed = ["sed", "-i"]
-        sed_node = sed + [r"1i\name\tlength\tfrequency\tsources", node_file]
+        sed_node = sed + [r"1i\name\tlength\tfrequency\tpaths", node_file]
         sed_edge = sed + [r"1i\source\ttarget", edge_file]
 
         cmd = locale + join1 + sort_edge_2 + join2
@@ -798,7 +835,7 @@ class GFA:
                 node_file,
                 sep="\t",
                 dtype={"name": "str", "length": "int32", "frequency": "float32"},
-                converters={"sources": lambda s: s.split(",")},
+                converters={"paths": lambda s: s.split(",") if s else []},
             )
             edge_df = pd.read_csv(
                 edge_file, sep="\t", dtype={"source": "str", "target": "str"}

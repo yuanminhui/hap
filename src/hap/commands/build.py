@@ -173,8 +173,8 @@ def validate_gfa(gfa_obj: gfa.GFA) -> ValidationResult:
 
     if not gfa_obj.can_extract_length():
         return ValidationResult(False, "The GFA file lacks length information.")
-    if len(gfa_obj.get_haplotypes()) == 0:
-        return ValidationResult(False, "The GFA file lacks haplotype information.")
+    if len(gfa_obj.get_genome_names()) == 0:
+        return ValidationResult(False, "The GFA file lacks genome information.")
 
     # Validate path lines (per plan.freeze.json phase 2)
     is_valid, errors = gfa_obj.validate_path_lines()
@@ -290,7 +290,7 @@ def add_deletion_node(
 
     # Original implementation
     del_node = graph.add_vertex(get_id("s"), length=0).index
-    graph.vs[del_node]["sources"] = []
+    graph.vs[del_node]["paths"] = []
     graph.vs[del_node]["frequency"] = 0
 
     graph.add_edges([(from_node, del_node), (del_node, to_node)])
@@ -314,13 +314,13 @@ def process_path(
     st = segments
     start = start_node
     visited = visited_nodes
-    haplotypes = g["haplotypes"].split(",")
+    paths_total = g["paths_total"]
 
     # Init the path based on traverse order
     # If is main path
     if g.vs[start]["name"] == "head":
         region = Region(get_id("r"), "con")
-        region.sources = haplotypes
+        region.paths = g["paths"]
         segment = Segment(get_id("s"))
         segment.is_wrapper = True
 
@@ -342,21 +342,23 @@ def process_path(
             pi = st[st["id"] == parseg_id].index[0]
             level = st.at[pi, "level_range"][0] + 1
             sub_regions = st.at[pi, "sub_regions"]
-            sources = st.at[pi, "sources"].copy()
+            parent_paths = st.at[pi, "paths"].copy()
 
             # Build elements and fill properties
             if g.vs[before]["name"] != "head":
                 # TODO: change to support consensus bead that contain more than one node
                 previous_region = Region(get_id("r"), "con")
                 previous_region.level_range = [level, level]
-                previous_region.sources = sources
+                previous_region.paths = parent_paths
                 previous_seg = (
                     previous_region.add_segment(g.vs[before]["name"], original=True)
                     if g.vs[before]["length"] > 0
                     else previous_region.add_segment(g.vs[before]["name"])
                 )
                 previous_seg.length = g.vs[before]["length"]
-                previous_seg.frequency = len(previous_seg.sources) / len(haplotypes)
+                previous_seg.frequency = (
+                    len(previous_seg.paths) / paths_total if paths_total else 0
+                )
                 previous_region.parent_segment = parseg_id
                 # write to dataframe
                 st = pd.concat(
@@ -375,7 +377,7 @@ def process_path(
             segment.level_range = region.level_range = [level, level]
             g.vs[before]["parent_segment"] = None  # "before" can't be accessed anymore
             region.parent_segment = parseg_id
-            region.sources = sources
+            region.paths = parent_paths
             region.before = g.vs[before]["name"]
             sub_regions.append(region.id)
             # suspend current region dumping (to df) for potential updates
@@ -420,8 +422,7 @@ def process_path(
         g.vs[node]["parent_segment"] = segment.id
         g.vs[node]["path"] = len(paths)
         if g.vs[node]["name"] != "head" and g.vs[node]["name"] != "tail":
-            segment.sources = list(set().union(segment.sources, g.vs[node]["sources"]))
-            segment.frequency = max(segment.frequency, g.vs[node]["frequency"])
+            segment.paths = list(set().union(segment.paths, g.vs[node]["paths"]))
         last = node
 
     # Rewrite properties if no `sub_regions` would be found
@@ -438,6 +439,8 @@ def process_path(
     else:
         paths.append(path)
         segment.is_wrapper = True
+    if paths_total:
+        segment.frequency = len(segment.paths) / paths_total
     region.segments.append(
         segment.id
     )  # if region exists in the dataframe, it's `segments` will be updated
@@ -487,8 +490,7 @@ def process_path(
                     else Segment(g.vs[origin_allele_node]["name"])
                 )
                 allele_segment.length = g.vs[origin_allele_node]["length"]
-                allele_segment.frequency = g.vs[origin_allele_node]["frequency"]
-                allele_segment.sources = g.vs[origin_allele_node]["sources"]
+                allele_segment.paths = g.vs[origin_allele_node]["paths"]
                 g.vs[origin_allele_node]["parent_segment"] = None
             else:
                 allele_segment = Segment(get_id("s"))
@@ -497,14 +499,13 @@ def process_path(
                     g.vs[node][
                         "parent_segment"
                     ] = allele_segment.id  # Update parent for separable nodes
-                    allele_segment.sources = list(
-                        set().union(allele_segment.sources, g.vs[node]["sources"])
-                    )
-                    allele_segment.frequency = max(
-                        allele_segment.frequency, g.vs[node]["frequency"]
+                    allele_segment.paths = list(
+                        set().union(allele_segment.paths, g.vs[node]["paths"])
                     )
 
             allele_segment.level_range = [level, level]
+            if paths_total:
+                allele_segment.frequency = len(allele_segment.paths) / paths_total
             region.segments.append(allele_segment.id)
             st = pd.concat(
                 [st, pd.DataFrame([allele_segment.to_dict()])],
@@ -525,7 +526,35 @@ def graph2rstree(graph: ig.Graph):
     visited_nodes: set[int] = set()
     path_starts: collections.deque = collections.deque()
     paths: list[list] = []
-    meta = {"sources": graph["haplotypes"].split(",")}
+    if "paths" in graph.attributes():
+        paths_raw = graph["paths"]
+        if isinstance(paths_raw, str):
+            all_paths = paths_raw.split(",") if paths_raw else []
+        else:
+            all_paths = list(paths_raw)
+    else:
+        all_paths_set: set[str] = set()
+        for node_paths in graph.vs["paths"]:
+            all_paths_set.update(node_paths)
+        all_paths = sorted(all_paths_set)
+    graph["paths"] = all_paths
+
+    if "paths_total" in graph.attributes():
+        paths_total = int(graph["paths_total"])
+    else:
+        paths_total = len(all_paths)
+    graph["paths_total"] = paths_total
+
+    genome_keys_raw = graph["genomes"] if "genomes" in graph.attributes() else ""
+    if isinstance(genome_keys_raw, str):
+        genome_keys = genome_keys_raw.split(",") if genome_keys_raw else []
+    else:
+        genome_keys = list(genome_keys_raw)
+    meta = {
+        "genomes": genome_keys,
+        "paths_total": graph["paths_total"],
+        "paths": graph["paths"],
+    }
     rt = pd.DataFrame(
         columns=[
             "id",
@@ -540,7 +569,7 @@ def graph2rstree(graph: ig.Graph):
             "subgraph",
             "parent_segment",
             "segments",
-            "sources",
+            "paths",
             "min_length",
             "before",
             "after",
@@ -560,7 +589,7 @@ def graph2rstree(graph: ig.Graph):
             "total_variants",
             "is_wrapper",
             "sub_regions",
-            "sources",
+            "paths",
         ]
     )
     try:
@@ -597,14 +626,15 @@ def graph2rstree(graph: ig.Graph):
             # build elements and fill properties
             region = Region(get_id("r"), "con")
             region.level_range = [level, level]
-            region.sources = st.at[pi, "sources"].copy()
+            region.paths = st.at[pi, "paths"].copy()
             segment = (
                 region.add_segment(se["name"], original=True)
                 if se["length"] > 0
                 else region.add_segment(se["name"])
             )
             segment.length = se["length"]
-            segment.frequency = len(segment.sources) / len(meta["sources"])
+            if meta["paths_total"]:
+                segment.frequency = len(segment.paths) / meta["paths_total"]
             region.parent_segment = parseg_id
 
             # write to dataframe
@@ -651,22 +681,22 @@ def graph2rstree(graph: ig.Graph):
 
     # Fill dispensable properties for created elements
 
-    def fill_sources(group):
-        """Fill `frequency` & `sources` field for some created segments."""
-        rows = group["sources"].apply(len) == 0
+    def fill_paths(group):
+        """Fill `frequency` & `paths` field for some created segments."""
+        rows = group["paths"].apply(len) == 0
         if rows.any():
             i = group.index[rows][0]
-            group.at[i, "sources"] = list(
-                set(group["sources_r"].iloc[0])
-                - set().union(*[x for x in group["sources"] if len(x) > 0])
+            group.at[i, "paths"] = list(
+                set(group["paths_r"].iloc[0])
+                - set().union(*[x for x in group["paths"] if len(x) > 0])
             )
-            group.at[i, "frequency"] = len(group.at[i, "sources"]) / len(
-                meta["sources"]
-            )
+            if meta["paths_total"]:
+                frequency = len(group.at[i, "paths"]) / meta["paths_total"]
+                group.at[i, "frequency"] = frequency
         return group
 
     exploded = st.merge(
-        rt.loc[:, ["id", "segments", "sources"]].explode("segments"),
+        rt.loc[:, ["id", "segments", "paths"]].explode("segments"),
         left_on="id",
         right_on="segments",
         how="left",
@@ -675,7 +705,7 @@ def graph2rstree(graph: ig.Graph):
         "segments", axis=1
     )  # add region id for grouping
     exploded = exploded.groupby("id_r", group_keys=False).apply(
-        fill_sources
+        fill_paths
     )  # fill the blanks
 
     exploded["rank"] = (
@@ -686,7 +716,7 @@ def graph2rstree(graph: ig.Graph):
         .astype(int)
         - 1
     )  # calculate rank by ordering
-    st = exploded.drop(["id_r", "sources_r"], axis=1)
+    st = exploded.drop(["id_r", "paths_r"], axis=1)
 
     return rt, st, meta
 
@@ -917,14 +947,13 @@ def wrap_rstree(
             # build wrapper elements and fill properties
             wrapper_region = Region(get_id("r"), "con")
             wrapper_region.level_range = [i, i]
-            wrapper_region.sources = segment.sources.copy()
+            wrapper_region.paths = segment.paths.copy()
             wrapper_segment = wrapper_region.add_segment(get_id("s"))
             wrapper_region.length = wrapper_region.min_length = (
                 wrapper_segment.length
             ) = total_length
-            wrapper_segment.frequency = len(wrapper_segment.sources) / len(
-                meta["sources"]
-            )
+            if meta["paths_total"]:
+                wrapper_segment.frequency = len(wrapper_segment.paths) / meta["paths_total"]
             wrapper_segment.is_wrapper = True
             wrapper_segment.semantic_id = wrapper_region.semantic_id = get_id("con")
             wrapper_segment.direct_variants = len(r2bw_df[r2bw_df["is_variant"]])
@@ -970,16 +999,22 @@ def wrap_rstree(
                 copy=False,
             )
 
-            wrapper_regions = pd.concat(
-                [wrapper_regions, wrapper_region_df],
-                ignore_index=True,
-                copy=False,
-            )
-            wrapper_segments = pd.concat(
-                [wrapper_segments, wrapper_segment_df],
-                ignore_index=True,
-                copy=False,
-            )
+            if wrapper_regions.empty:
+                wrapper_regions = wrapper_region_df
+            else:
+                wrapper_regions = pd.concat(
+                    [wrapper_regions, wrapper_region_df],
+                    ignore_index=True,
+                    copy=False,
+                )
+            if wrapper_segments.empty:
+                wrapper_segments = wrapper_segment_df
+            else:
+                wrapper_segments = pd.concat(
+                    [wrapper_segments, wrapper_segment_df],
+                    ignore_index=True,
+                    copy=False,
+                )
 
             # iterate preparation for update of parent segment's `sub_regions` property
             region_ids[irange[0] : irange[1] + 1] = [""] * (irange[1] - irange[0] + 1)
@@ -1077,12 +1112,18 @@ def wrap_rstree(
             for res in calc_after_wrapping:
 
                 # Add wrapper regions and segments to dataframes
-                rt = pd.concat(
-                    [rt, res["wrapper_regions"]], ignore_index=True, copy=False
-                )
-                st = pd.concat(
-                    [st, res["wrapper_segments"]], ignore_index=True, copy=False
-                )
+                if not res["wrapper_regions"].empty:
+                    rt = pd.concat(
+                        [rt, res["wrapper_regions"]],
+                        ignore_index=True,
+                        copy=False,
+                    )
+                if not res["wrapper_segments"].empty:
+                    st = pd.concat(
+                        [st, res["wrapper_segments"]],
+                        ignore_index=True,
+                        copy=False,
+                    )
 
                 # Update parent segment's `sub_regions` property
                 st.at[res["parent_segment_index"], "sub_regions"] = res[
@@ -1390,10 +1431,224 @@ def build_preprocessed_subgraphs_in_parallel(
         return pool.starmap(partial_build, preprocessed_subgraphs)
 
 
+
+def _parse_range(range_str: str) -> tuple[int, int]:
+    """Parse int8range text like '[0,10)' into (start, end)."""
+
+    if not range_str:
+        return 0, 0
+    body = range_str.strip()[1:-1]
+    start_str, end_str = body.split(",", 1)
+    return int(start_str), int(end_str)
+
+
+def _format_range(start: int, end: int) -> str:
+    """Format (start, end) as int8range text."""
+
+    return f"[{start},{end})"
+
+
+def _extend_path_coords_for_non_original_segments(
+    regions: pd.DataFrame,
+    segments: pd.DataFrame,
+    paths_df: pd.DataFrame,
+    path_seg_coords_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Add path coordinates for wrapper/deletion segments without sequences."""
+
+    if path_seg_coords_df.empty or paths_df.empty:
+        return path_seg_coords_df
+
+    path_coords: dict[int, dict[int, tuple[int, int]]] = {}
+    existing_seg_by_path: dict[int, set[int]] = {}
+    max_order_by_path: dict[int, int] = {}
+    for row in path_seg_coords_df.itertuples(index=False):
+        path_id = int(row.path_id)
+        seg_id = int(row.segment_id)
+        start, end = _parse_range(row.coordinate)
+        path_coords.setdefault(path_id, {})[seg_id] = (start, end)
+        existing_seg_by_path.setdefault(path_id, set()).add(seg_id)
+        max_order_by_path[path_id] = max(
+            max_order_by_path.get(path_id, -1),
+            int(row.segment_order),
+        )
+
+    region_segments = regions.set_index("id")["segments"].to_dict()
+    segment_sub_regions = segments.set_index("id")["sub_regions"].to_dict()
+    segment_original = segments.set_index("id")["original_id"].notna().to_dict()
+    segment_paths = segments.set_index("id")["paths"].to_dict()
+    segment_region: dict[int, int] = {}
+    for region_id, seg_ids in region_segments.items():
+        for seg_id in seg_ids:
+            segment_region[int(seg_id)] = int(region_id)
+    region_parent_segment = regions.set_index("id")["parent_segment"].to_dict()
+
+    paths_by_name = {
+        row.name: int(row.id)
+        for row in paths_df.itertuples(index=False)
+    }
+
+    def path_ids_for_paths(paths: list[str]) -> set[int]:
+        return {
+            paths_by_name[p]
+            for p in paths
+            if p in paths_by_name
+        }
+
+    from functools import lru_cache
+
+    @lru_cache(maxsize=None)
+    def leaf_segments(seg_id: int) -> set[int]:
+        if segment_original.get(seg_id):
+            return {seg_id}
+        leaves: set[int] = set()
+        for region_id in segment_sub_regions.get(seg_id, []):
+            for child_seg in region_segments.get(region_id, []):
+                leaves.update(leaf_segments(int(child_seg)))
+        return leaves
+
+    @lru_cache(maxsize=None)
+    def region_leaf_segments(region_id: int) -> set[int]:
+        leaves: set[int] = set()
+        for seg_id in region_segments.get(region_id, []):
+            leaves.update(leaf_segments(int(seg_id)))
+        return leaves
+
+    new_entries: dict[int, list[dict[str, int]]] = {}
+
+    for row in segments.itertuples(index=False):
+        seg_id = int(row.id)
+        if segment_original.get(seg_id):
+            continue
+
+        leafs = leaf_segments(seg_id)
+        if leafs:
+            for path_id, seg_map in path_coords.items():
+                coords = [seg_map[lid] for lid in leafs if lid in seg_map]
+                if not coords or seg_id in existing_seg_by_path.get(path_id, set()):
+                    continue
+                start = min(c[0] for c in coords)
+                end = max(c[1] for c in coords)
+                new_entries.setdefault(path_id, []).append(
+                    {"segment_id": seg_id, "start": start, "end": end}
+                )
+            continue
+
+        paths = segment_paths.get(seg_id, [])
+        path_ids = path_ids_for_paths(paths)
+        if not path_ids:
+            continue
+
+        region_id = segment_region.get(seg_id)
+        parent_segment = region_parent_segment.get(region_id)
+        if parent_segment is None:
+            continue
+        parent_segment = int(parent_segment)
+        parent_sub_regions = segment_sub_regions.get(parent_segment, [])
+        if not parent_sub_regions:
+            continue
+
+        for path_id in path_ids:
+            seg_map = path_coords.get(path_id, {})
+            parent_leafs = leaf_segments(parent_segment)
+            parent_coords = [seg_map[lid] for lid in parent_leafs if lid in seg_map]
+            if not parent_coords:
+                continue
+            parent_start = min(c[0] for c in parent_coords)
+
+            cursor = parent_start
+            region_start = None
+            for rid in parent_sub_regions:
+                rid = int(rid)
+                leafs_r = region_leaf_segments(rid)
+                coords_r = [seg_map[lid] for lid in leafs_r if lid in seg_map]
+                length_r = sum(c[1] - c[0] for c in coords_r)
+                if rid == region_id:
+                    region_start = cursor
+                    break
+                cursor += length_r
+            if region_start is None:
+                continue
+            if seg_id in existing_seg_by_path.get(path_id, set()):
+                continue
+            new_entries.setdefault(path_id, []).append(
+                {"segment_id": seg_id, "start": region_start, "end": region_start}
+            )
+
+    if not new_entries:
+        return path_seg_coords_df
+
+    new_rows = []
+    for path_id, entries in new_entries.items():
+        entries.sort(key=lambda item: (item["start"], item["end"], item["segment_id"]))
+        next_order = max_order_by_path.get(path_id, -1) + 1
+        for entry in entries:
+            new_rows.append({
+                "path_id": path_id,
+                "segment_id": entry["segment_id"],
+                "coordinate": _format_range(entry["start"], entry["end"]),
+                "segment_order": next_order,
+            })
+            next_order += 1
+
+    extra_df = pd.DataFrame(new_rows)
+    if extra_df.empty:
+        return path_seg_coords_df
+
+    return pd.concat([path_seg_coords_df, extra_df], ignore_index=True, copy=False)
+
+
+def _ensure_path_links_for_segments(
+    segments: pd.DataFrame,
+    paths_df: pd.DataFrame,
+    path_seg_coords_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Ensure each segment has a path link, even if coordinate/order is missing."""
+
+    if paths_df.empty:
+        return path_seg_coords_df
+
+    existing_pairs = {
+        (int(row.path_id), int(row.segment_id))
+        for row in path_seg_coords_df.itertuples(index=False)
+    }
+    paths_by_name = {
+        row.name: int(row.id)
+        for row in paths_df.itertuples(index=False)
+    }
+    segment_paths = segments.set_index("id")["paths"].to_dict()
+
+    new_rows = []
+    for row in segments.itertuples(index=False):
+        seg_id = int(row.id)
+        paths = segment_paths.get(seg_id, [])
+        if not paths:
+            continue
+        path_ids = {paths_by_name[p] for p in paths if p in paths_by_name}
+
+        for path_id in path_ids:
+            pair = (path_id, seg_id)
+            if pair in existing_pairs:
+                continue
+            existing_pairs.add(pair)
+            new_rows.append({
+                "path_id": path_id,
+                "segment_id": seg_id,
+                "coordinate": None,
+                "segment_order": None,
+            })
+
+    if not new_rows:
+        return path_seg_coords_df
+
+    extra_df = pd.DataFrame(new_rows)
+    return pd.concat([path_seg_coords_df, extra_df], ignore_index=True, copy=False)
+
+
 def generate_path_data(
     gfa_filepath: str,
     segments: pd.DataFrame,
-    id_map_genome: dict[str, int],
+    id_map_genome: dict[tuple[str, int], int],
     subgraph_id: int,
     db_connection: psycopg2.extensions.connection,
     path_genome_map: dict[str, str] = None,
@@ -1411,10 +1666,10 @@ def generate_path_data(
     Args:
         gfa_filepath: Path to GFA file
         segments: DataFrame of segments with original_id mapping
-        id_map_genome: Mapping of genome names to genome IDs
+        id_map_genome: Mapping of (sample, haplotype_id) to genome IDs
         subgraph_id: Current subgraph ID
         db_connection: Database connection
-        path_genome_map: Optional explicit mapping from path names to genome names
+        path_genome_map: Optional explicit mapping from path names to genome keys
 
     Returns:
         tuple[pd.DataFrame, pd.DataFrame]: (paths_df, path_seg_coords_df)
@@ -1426,7 +1681,6 @@ def generate_path_data(
 
     # Get next IDs for path and coordinate records
     id_start_path = db.get_next_id_from_table(conn, "path")
-    id_start_path_seg_coord = db.get_next_id_from_table(conn, "path_segment_coordinate")
 
     # Prepare segment mapping file: original_id -> internal_id, length
     seg_map_file = tempfile.NamedTemporaryFile('w', delete=False, suffix='.seg_map.tsv')
@@ -1445,7 +1699,13 @@ def generate_path_data(
         genome_map_file = tempfile.NamedTemporaryFile('w', delete=False, suffix='.genome_map.tsv')
         try:
             for path_name, genome_name in path_genome_map.items():
-                genome_id = id_map_genome.get(genome_name, 0)
+                parts = genome_name.split(":")
+                sample_name = parts[0]
+                try:
+                    haplotype_id = int(parts[1]) if len(parts) > 1 else 0
+                except ValueError:
+                    haplotype_id = 0
+                genome_id = id_map_genome.get((sample_name, haplotype_id), 0)
                 genome_map_file.write(f"{path_name}\t{genome_id}\n")
             genome_map_file.flush()
             genome_map_path = genome_map_file.name
@@ -1467,7 +1727,6 @@ def generate_path_data(
             "-v", f"path_file={path_file.name}",
             "-v", f"subgraph_id={subgraph_id}",
             "-v", f"next_path_id={id_start_path}",
-            "-v", f"next_coord_id={id_start_path_seg_coord}",
         ]
         if genome_map_path:
             cmd.extend(["-v", f"genome_map_file={genome_map_path}"])
@@ -1493,38 +1752,15 @@ def generate_path_data(
                     continue
 
                 parts = line.strip().split('\t')
-                if len(parts) < 6:
+                if len(parts) < 5:
                     continue
 
-                _, path_id, path_name, genome_id_str, subgraph_id_str, length_str = parts[:6]
+                _, path_id, genome_id_str, subgraph_id_str, length_str = parts[:5]
 
                 # Resolve genome_id if not set (0 means unresolved)
                 genome_id = int(genome_id_str)
                 if genome_id == 0:
-                    # Try to resolve from path name using parse_paths logic
-                    gfa_obj = gfa.GFA(gfa_filepath)
-                    path_info_list = gfa_obj.parse_paths(path_genome_map)
-                    for pinfo in path_info_list:
-                        if pinfo["name"] == path_name:
-                            genome_name_str = pinfo["genome_name"]
-
-                            # Parse genome_name: "sample#haplotype_index" (e.g., "HG002#1")
-                            if '#' in genome_name_str:
-                                sample, haplotype_str = genome_name_str.rsplit('#', 1)
-                                haplotype_index = int(haplotype_str)
-                            else:
-                                sample = genome_name_str
-                                haplotype_index = 0
-
-                            # Lookup genome_id using (sample, haplotype_index) key
-                            genome_id = id_map_genome.get((sample, haplotype_index), 0)
-
-                            if genome_id == 0:
-                                raise DataInvalidError(
-                                    f"Genome ('{sample}', {haplotype_index}) not found in id_map_genome. "
-                                    f"Available: {list(id_map_genome.keys())}"
-                                )
-                            break
+                    continue
 
                 # Skip paths with unresolved genome_id
                 if genome_id == 0:
@@ -1532,7 +1768,6 @@ def generate_path_data(
 
                 paths_data.append({
                     "id": int(path_id),
-                    "name": path_name,
                     "genome_id": genome_id,
                     "subgraph_id": int(subgraph_id_str),
                     "length": int(length_str),
@@ -1543,12 +1778,11 @@ def generate_path_data(
         with open(coord_file.name, 'r') as f:
             for line in f:
                 parts = line.strip().split('\t')
-                if len(parts) < 5:
+                if len(parts) < 4:
                     continue
 
-                coord_id, path_id, segment_id, coordinate, segment_order = parts[:5]
+                path_id, segment_id, coordinate, segment_order = parts[:4]
                 coord_data.append({
-                    "id": int(coord_id),
                     "path_id": int(path_id),
                     "segment_id": int(segment_id),
                     "coordinate": coordinate,
@@ -1570,7 +1804,6 @@ def generate_path_data(
         if not paths_df.empty:
             paths_df = paths_df.astype({
                 "id": "uint64",
-                "name": "string",
                 "genome_id": "uint32",
                 "subgraph_id": "uint16",
                 "length": "uint64",
@@ -1578,11 +1811,10 @@ def generate_path_data(
 
         if not path_seg_coords_df.empty:
             path_seg_coords_df = path_seg_coords_df.astype({
-                "id": "uint64",
                 "path_id": "uint64",
                 "segment_id": "uint64",
                 "coordinate": "string",
-                "segment_order": "uint16",
+                "segment_order": "Int64",
             }, copy=False)
 
         return paths_df, path_seg_coords_df
@@ -1689,29 +1921,29 @@ def hap2db(
     with conn.cursor() as cursor:
         try:
             conn.autocommit = False
-            # Get clade ID
-            cursor.execute("SELECT id FROM clade WHERE name = %s", (hap_info["clade"],))
+            # Get taxon ID
+            cursor.execute("SELECT id FROM taxon WHERE name = %s", (hap_info["taxon"],))
             result = cursor.fetchone()
             if result is not None:
-                clade_id = result[0]
-            else:  # Add `clade` record if not exists
+                taxon_id = result[0]
+            else:  # Add `taxon` record if not exists
                 cursor.execute(
-                    "INSERT INTO clade (name) VALUES (%s) RETURNING id",
-                    (hap_info["clade"],),
+                    "INSERT INTO taxon (name) VALUES (%s) RETURNING id",
+                    (hap_info["taxon"],),
                 )
                 result = cursor.fetchone()
                 if result is None:
-                    raise DatabaseError("Failed to insert clade record.")
-                clade_id = result[0]
+                    raise DatabaseError("Failed to insert taxon record.")
+                taxon_id = result[0]
 
             # Add `pangenome` record
             hap_info["builder"] = f"hap v{hap.VERSION}"
             hap_info["genome_ids"] = []
             cursor.execute(
-                "INSERT INTO pangenome (name, clade_id, description,creater, builder) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                "INSERT INTO pangenome (name, taxon_id, description,creater, builder) VALUES (%s, %s, %s, %s, %s) RETURNING id",
                 (
                     hap_info["name"],
-                    clade_id,
+                    taxon_id,
                     hap_info["description"],
                     hap_info["creater"],
                     hap_info["builder"],
@@ -1746,28 +1978,46 @@ def hap2db(
                 update_ids_by_subgraph(rt, st, subgraph_id, conn, sequence_file)
 
                 # Add genome IDs to hap_info
-                # Parse sources format: "sample:haplotype_index:haplotype_origin"
+                # Parse genome keys format: "sample:haplotype_id:hap_origin"
                 id_map_genome: dict[tuple[str, int], int] = {}
-                for genome_str in meta["sources"]:
+                for genome_str in meta["genomes"]:
                     if genome_str == "":
                         continue
 
-                    # Parse "sample:haplotype_index:haplotype_origin"
+                    # Parse "sample:haplotype_id:hap_origin"
                     parts = genome_str.split(":")
                     if len(parts) >= 2:
                         sample = parts[0]
-                        haplotype_index = int(parts[1])
-                        haplotype_origin = parts[2] if len(parts) > 2 else 'assumed'
+                        haplotype_id = int(parts[1])
+                        hap_origin = parts[2] if len(parts) > 2 else "assumed"
                     else:
                         # Fallback for unexpected format
                         sample = genome_str
-                        haplotype_index = 0
-                        haplotype_origin = 'assumed'
+                        haplotype_id = 0
+                        hap_origin = "assumed"
+
+                    # Upsert sample
+                    cursor.execute(
+                        "SELECT id FROM sample WHERE name = %s",
+                        (sample,),
+                    )
+                    result = cursor.fetchone()
+                    if result is not None:
+                        sample_id = result[0]
+                    else:
+                        cursor.execute(
+                            "INSERT INTO sample (name) VALUES (%s) RETURNING id",
+                            (sample,),
+                        )
+                        result = cursor.fetchone()
+                        if result is None:
+                            raise DatabaseError("Failed to insert sample record.")
+                        sample_id = result[0]
 
                     # Check if genome exists
                     cursor.execute(
-                        "SELECT id FROM genome WHERE name = %s AND haplotype_index = %s",
-                        (sample, haplotype_index)
+                        "SELECT id FROM genome WHERE sample_id = %s AND haplotype_id = %s",
+                        (sample_id, haplotype_id),
                     )
                     result = cursor.fetchone()
 
@@ -1776,17 +2026,23 @@ def hap2db(
                     else:
                         # Insert new genome
                         cursor.execute(
-                            """INSERT INTO genome (name, haplotype_index, haplotype_origin, clade_id)
-                               VALUES (%s, %s, %s, %s) RETURNING id""",
-                            (sample, haplotype_index, haplotype_origin, clade_id)
+                            """INSERT INTO genome (sample_id, haplotype_id, hap_origin, name, taxon_id)
+                               VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+                            (
+                                sample_id,
+                                haplotype_id,
+                                hap_origin,
+                                f"{sample}#{haplotype_id}",
+                                taxon_id,
+                            ),
                         )
                         result = cursor.fetchone()
                         if result is None:
                             raise DatabaseError("Failed to insert genome record.")
                         genome_id = result[0]
 
-                    # Store with (sample, haplotype_index) as key
-                    id_map_genome[(sample, haplotype_index)] = genome_id
+                    # Store with (sample, haplotype_id) as key
+                    id_map_genome[(sample, haplotype_id)] = genome_id
                 hap_info["genome_ids"] = list(
                     set().union(hap_info["genome_ids"], id_map_genome.values())
                 )
@@ -1813,19 +2069,31 @@ def hap2db(
                     if not paths_df.empty:
                         paths_df = paths_df.astype({
                             "id": "uint64",
-                            "name": "string",
                             "genome_id": "uint32",
                             "subgraph_id": "uint16",
                             "length": "uint64",
                         }, copy=False)
                     if not path_seg_coords_df.empty:
                         path_seg_coords_df = path_seg_coords_df.astype({
-                            "id": "uint64",
                             "path_id": "uint64",
                             "segment_id": "uint64",
                             "coordinate": "string",
-                            "segment_order": "uint16",
+                            "segment_order": "Int64",
                         }, copy=False)
+                    if not path_seg_coords_df.empty:
+                        path_seg_coords_df = _extend_path_coords_for_non_original_segments(
+                            rt, st, paths_df, path_seg_coords_df
+                        )
+                        path_seg_coords_df = _ensure_path_links_for_segments(
+                            st, paths_df, path_seg_coords_df
+                        )
+                        if not path_seg_coords_df.empty:
+                            path_seg_coords_df = path_seg_coords_df.astype({
+                                "path_id": "uint64",
+                                "segment_id": "uint64",
+                                "coordinate": "string",
+                                "segment_order": "Int64",
+                            }, copy=False)
 
                 # Format `segment` table
                 st = st.merge(
@@ -1835,7 +2103,7 @@ def hap2db(
                     how="left",
                     suffixes=("", "_r"),
                     copy=False,
-                ).drop(["segments", "original_id", "sub_regions", "sources"], axis=1)
+                ).drop(["segments", "original_id", "sub_regions", "paths"], axis=1)
                 st.rename(columns={"id_r": "region_id"}, inplace=True)
                 st = st[
                     [
@@ -1877,7 +2145,7 @@ def hap2db(
                         "length",
                         "is_variant",
                         "segments",
-                        "sources",
+                        "paths",
                         "min_length",
                         "before",
                         "after",
@@ -1940,7 +2208,7 @@ def hap2db(
                         paths_df.to_csv(tmp_path, sep="\t", index=False, header=False)
                     if not path_seg_coords_df.empty:
                         path_seg_coords_df.to_csv(
-                            tmp_path_seg_coord, sep="\t", index=False, header=False
+                            tmp_path_seg_coord, sep="\t", index=False, header=False, na_rep=""
                         )
 
                     with open(tmp_segment) as f:
@@ -1964,7 +2232,7 @@ def hap2db(
                                 "path",
                                 sep="\t",
                                 null="",
-                                columns=("id", "name", "genome_id", "subgraph_id", "length"),
+                                columns=("id", "genome_id", "subgraph_id", "length"),
                             )  # Dump `path` records
                     if not path_seg_coords_df.empty:
                         with open(tmp_path_seg_coord) as f:
@@ -1973,7 +2241,7 @@ def hap2db(
                                 "path_segment_coordinate",
                                 sep="\t",
                                 null="",
-                                columns=("id", "path_id", "segment_id", "coordinate", "segment_order"),
+                                columns=("path_id", "segment_id", "coordinate", "segment_order"),
                             )  # Dump `path_segment_coordinate` records
 
                     if sequence_file:
@@ -2015,7 +2283,7 @@ def hap2db(
 #             "semantic_id",
 #             "level_range",
 #             "length",
-#             "sources",
+#             "genomes",
 #             "is_variant",
 #             "total_variants",
 #             "min_length",
@@ -2053,7 +2321,7 @@ def hap2db(
 #         ).drop("segments", axis=1)
 #         st.to_csv(basepath + ".st.tsv", sep="\t", na_rep="*", index=False)
 
-#         meta["sources"] = ",".join(meta["sources"])
+#         meta["genomes"] = ",".join(meta["genomes"])
 #         metasr = pd.Series(meta)
 #         metasr.to_csv(basepath + ".meta.tsv", sep="\t", na_rep="*", header=False)
 
@@ -2120,7 +2388,24 @@ def check_name(name: str) -> bool:
     # Check if the name exists in the database
     try:
         with db.auto_connect() as conn:
-            db.create_tables_if_not_exist(conn)
+            try:
+                db.create_tables_if_not_exist(conn)
+            except psycopg2.errors.InsufficientPrivilege:
+                conn.rollback()
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT 1
+                        FROM information_schema.tables
+                        WHERE table_schema = 'public' AND table_name = 'pangenome'
+                        """
+                    )
+                    if cursor.fetchone() is None:
+                        raise DatabaseError(
+                            "Database schema is not initialized and current user "
+                            "lacks CREATE privileges. Ask an admin to run "
+                            "`src/sql/create_tables.sql`."
+                        )
             with conn.cursor() as cursor:
                 cursor.execute("SELECT 1 FROM pangenome WHERE name = %s", (name,))
                 return not cursor.fetchone()
@@ -2159,10 +2444,10 @@ def main():
     help="Name of the Hierarchical Pangenome",
 )
 @click.option(
-    "-a",
-    "--clade",
-    prompt="Clade of the HAP",
-    help="Clade of the Hierarchical Pangenome",
+    "-t",
+    "--taxon",
+    prompt="Taxon of the HAP",
+    help="Taxon of the Hierarchical Pangenome",
 )
 @click.option(
     "-c",
@@ -2197,29 +2482,17 @@ def main():
     default=0.04,
     help="Minimum resolution of the Hierarchical Pangenome, in bp/px",
 )
-@click.option(
-    "--annotations",
-    type=click.Path(exists=True, path_type=pathlib.Path),
-    help="Annotation file (GFF3/GTF/BED) to import during build",
-)
-@click.option(
-    "--annotation-format",
-    type=click.Choice(["gff3", "gtf", "bed"], case_sensitive=False),
-    help="Annotation file format (auto-detected if not specified)",
-)
 def run(
     ctx: click.Context,
     path: tuple[pathlib.Path],
     name: str,
-    clade: str,
+    taxon: str,
     creater: str,
     description: str,
     from_subgraphs: bool,
     contig: bool,
     min_res: float,
     sequence_file: pathlib.Path = None,
-    annotations: pathlib.Path = None,
-    annotation_format: str = None,
 ):
     """
     Build a Hierarchical Pangenome from a pangenome graph in GFA format, and
@@ -2296,7 +2569,7 @@ def run(
         # Save to database
         hap_info = {
             "name": name,
-            "clade": clade,
+            "taxon": taxon,
             "creater": creater,
             "description": description,
         }
@@ -2308,32 +2581,6 @@ def run(
 
         with db.auto_connect() as conn:
             hap2db(hap_info, sub_haps, conn, subgraph_gfa_map)
-
-            # Import annotations if provided
-            if annotations:
-                from hap.commands.annotation import import_annotations, detect_annotation_format
-
-                # Auto-detect format if not specified
-                ann_format = annotation_format or detect_annotation_format(str(annotations))
-                click.echo(f"Importing annotations from {annotations} (format: {ann_format})...")
-
-                # Import annotations for each path in the database
-                # For now, assume the first path matches the seqid in annotations
-                # TODO: In future, may need to map seqid -> path_name or allow user to specify
-                with conn.cursor() as cur:
-                    cur.execute("SELECT DISTINCT name FROM path LIMIT 1;")
-                    path_row = cur.fetchone()
-                    if path_row:
-                        path_name = path_row[0]
-                        num_imported = import_annotations(
-                            connection=conn,
-                            filepath=str(annotations),
-                            format_type=ann_format.lower(),
-                            path_name=path_name,
-                        )
-                        click.echo(f"Successfully imported {num_imported} annotations")
-                    else:
-                        click.echo("Warning: No paths found in database, skipping annotation import", err=True)
 
     finally:
         if not from_subgraphs:

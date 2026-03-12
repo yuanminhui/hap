@@ -26,7 +26,7 @@ Implement comprehensive annotation support for HAP (Hierarchical Pangenome) tool
    - Convert coordinates: GFF3/GTF (1-based) → internal (0-based); BED already 0-based
    - Map genomic coordinates to segment-based coordinates via `path_segment_coordinate`
    - Generate `annotation_span` for ALL annotations (single or multi-segment)
-   - Support import during build (`--annotations` flag) and post-build (`annotation add`)
+   - Support post-build import via `annotation add` (build-time import removed)
 
 4. **Annotation Command**: Implement comprehensive annotation management CLI
    - Add: Import annotations from files with validation
@@ -54,7 +54,7 @@ Implement comprehensive annotation support for HAP (Hierarchical Pangenome) tool
 - [ ] GFA path validation integrated into build command with comprehensive tests
 - [ ] Path-segment coordinate generation working for all GFA versions
 - [ ] Annotation parsers implemented for GFF3, GTF, and BED formats
-- [ ] `build` command accepts `--annotations` parameter
+- [x] Build-time annotation import removed (use `annotation add`)
 - [ ] `annotation` command fully functional with all subcommands
 - [ ] Coordinate mapping from genome paths to segments working correctly
 - [ ] Mock annotation data created for `new-mini-example.gfa`
@@ -75,7 +75,7 @@ Implement comprehensive annotation support for HAP (Hierarchical Pangenome) tool
 - **NO CHANGE**: `src/hap/lib/elements.py` - Do not add Path/Annotation classes unless necessary
 
 ### Commands
-- **MODIFY**: `src/hap/commands/build.py` - Add --annotations parameter, path validation, path_segment_coordinate generation
+- **MODIFY**: `src/hap/commands/build.py` - Path validation, path_segment_coordinate generation (no build-time import)
 - **NEW**: `src/hap/commands/annotation.py` - Full CRUD operations (PRIMARY implementation location, not lib)
 
 ### Test Data
@@ -115,7 +115,7 @@ Implement comprehensive annotation support for HAP (Hierarchical Pangenome) tool
 1. Implement coordinate mapping: annotation (path-based) → segment-based (via path_segment_coordinate)
 2. Generate annotation_span records for ALL annotations (single and multi-segment)
 3. Use batch ID pre-generation pattern: get_next_id_from_table() + range()
-4. Add annotation import to build command (--annotations parameter)
+4. Build-time annotation import removed; use `annotation add`
 5. Create `annotation add` subcommand for post-build import
 6. Implement validation (check path/genome exists, coordinates valid)
 7. Verify segment_original_id exists for normal segments (wrapper/deletion excluded)
@@ -165,7 +165,7 @@ Implement comprehensive annotation support for HAP (Hierarchical Pangenome) tool
 - Data class serialization
 
 ### Integration Tests
-- End-to-end: build with --annotations
+- End-to-end: build then annotation add
 - Post-build: annotation add to existing HAP
 - Query with complex filters (range overlap, regex, multi-level)
 - Export and re-import (format round-trip)

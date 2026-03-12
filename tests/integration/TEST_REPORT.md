@@ -380,7 +380,6 @@ UPDATE subgraph SET name = 'chr1' WHERE name = '' OR name IS NULL;
 ### For Future Development
 
 1. **Features**
-   - Implement `build --annotations` parameter
    - Add bulk edit operations
    - Support for annotation versioning
    - Implement annotation comparison tools

@@ -56,7 +56,7 @@ CREATE TABLE genome (
     haplotype_origin IN ('provided', 'parsed', 'assumed')
   ),
   description TEXT,
-  clade_id INTEGER REFERENCES clade(id),
+  taxon_id BIGINT REFERENCES taxon(id),
   UNIQUE(name, haplotype_index)
 );
 ```
@@ -113,15 +113,13 @@ CREATE INDEX idx_annotation_coordinate ON annotation USING GIST(coordinate);
 #### annotation_span
 ```sql
 CREATE TABLE annotation_span (
-  id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
   annotation_id INTEGER NOT NULL REFERENCES annotation(id) ON DELETE CASCADE,
   segment_id INTEGER NOT NULL REFERENCES segment(id),
   coordinate INT4RANGE NOT NULL,        -- Segment-local coordinates
   span_order SMALLINT NOT NULL,         -- Order within annotation
-  UNIQUE(annotation_id, span_order)
+  PRIMARY KEY (annotation_id, span_order)
 );
 
-CREATE INDEX idx_annotation_span_annotation ON annotation_span(annotation_id);
 CREATE INDEX idx_annotation_span_segment ON annotation_span(segment_id);
 ```
 

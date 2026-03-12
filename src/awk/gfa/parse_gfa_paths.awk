@@ -1,6 +1,6 @@
 # parse_gfa_paths.awk
 # Extract and validate path information from GFA files (P/O/W lines)
-# Output format: path_name\tgenome_name\tnormalized_walk
+# Output format: path_name\tsample\thaplotype_id\thap_origin\tnormalized_walk
 # Usage: awk -f parse_pansn_str.awk -f parse_gfa_paths.awk file.gfa
 #
 # Features:
@@ -8,7 +8,7 @@
 # 2. Validates FORWARD-ONLY orientation (rejects '-' orientation)
 # 3. Normalizes walk to space-separated "segmentID segmentID ..." format
 # 4. Handles empty path names
-# 5. Resolves genome names via PanSN/delimiter conventions
+# 5. Resolves genome keys (sample + haplotype_id) via PanSN/delimiter conventions
 #
 # Error reporting to stderr:
 # - Invalid orientation errors
@@ -127,24 +127,30 @@ function normalize_walk_w(walk_str, path_name,    i, j, orient, seg_id, result) 
     if (path_name == "") {
         print "WARNING: Empty path name at line " NR ", assigning EMPTY_PATH_" NR > "/dev/stderr"
         path_name = "EMPTY_PATH_" NR
-        genome_name = "ERROR:EMPTY"
-        print path_name, genome_name, ""
+        sample = "ERROR:EMPTY"
+        print path_name, sample, "", "", ""
         next
     }
 
-    # Resolve genome name
+    # Resolve genome key: sample + haplotype_id
     if (parse_pansn_str(path_name, pa)) {
-        genome_name = pa[1]
+        sample = pa[1]
+        haplotype_id = pa[2]
+        hap_origin = "parsed"
+    } else if (index(path_name, "#")) {
+        split(path_name, parts, "#")
+        sample = parts[1]
+        haplotype_id = "0"
+        hap_origin = "assumed"
+    } else if (index(path_name, ".")) {
+        split(path_name, parts, ".")
+        sample = parts[1]
+        haplotype_id = "0"
+        hap_origin = "assumed"
     } else {
-        if (index(path_name, "#")) {
-            split(path_name, parts, "#")
-            genome_name = parts[1]
-        } else if (index(path_name, ".")) {
-            split(path_name, parts, ".")
-            genome_name = parts[1]
-        } else {
-            genome_name = "ERROR:" path_name
-        }
+        sample = "ERROR:" path_name
+        haplotype_id = ""
+        hap_origin = ""
     }
 
     # Normalize and validate walk
@@ -152,7 +158,7 @@ function normalize_walk_w(walk_str, path_name,    i, j, orient, seg_id, result) 
 
     # Only output if validation passed
     if (normalized_walk != "" || error_count == 0) {
-        print path_name, genome_name, normalized_walk
+        print path_name, sample, haplotype_id, hap_origin, normalized_walk
     }
 }
 
@@ -164,31 +170,37 @@ function normalize_walk_w(walk_str, path_name,    i, j, orient, seg_id, result) 
     if (path_name == "") {
         print "WARNING: Empty path name at line " NR ", assigning EMPTY_PATH_" NR > "/dev/stderr"
         path_name = "EMPTY_PATH_" NR
-        genome_name = "ERROR:EMPTY"
-        print path_name, genome_name, ""
+        sample = "ERROR:EMPTY"
+        print path_name, sample, "", "", ""
         next
     }
 
-    # Resolve genome name
+    # Resolve genome key: sample + haplotype_id
     if (parse_pansn_str(path_name, pa)) {
-        genome_name = pa[1]
+        sample = pa[1]
+        haplotype_id = pa[2]
+        hap_origin = "parsed"
+    } else if (index(path_name, "#")) {
+        split(path_name, parts, "#")
+        sample = parts[1]
+        haplotype_id = "0"
+        hap_origin = "assumed"
+    } else if (index(path_name, ".")) {
+        split(path_name, parts, ".")
+        sample = parts[1]
+        haplotype_id = "0"
+        hap_origin = "assumed"
     } else {
-        if (index(path_name, "#")) {
-            split(path_name, parts, "#")
-            genome_name = parts[1]
-        } else if (index(path_name, ".")) {
-            split(path_name, parts, ".")
-            genome_name = parts[1]
-        } else {
-            genome_name = "ERROR:" path_name
-        }
+        sample = "ERROR:" path_name
+        haplotype_id = ""
+        hap_origin = ""
     }
 
     # Normalize and validate walk
     normalized_walk = normalize_walk_o($3, path_name)
 
     if (normalized_walk != "" || error_count == 0) {
-        print path_name, genome_name, normalized_walk
+        print path_name, sample, haplotype_id, hap_origin, normalized_walk
     }
 }
 
@@ -207,14 +219,15 @@ function normalize_walk_w(walk_str, path_name,    i, j, orient, seg_id, result) 
     # Construct PanSN-compliant path name: sample#haplotype#sequence
     # genome_name: sample#haplotype (e.g., "hap1#0", "HG002#1")
     # path_name: sample#haplotype#sequence (e.g., "hap1#0#chr1", "HG002#1#1")
-    genome_name = sample "#" hap_index
+    haplotype_id = hap_index
+    hap_origin = "provided"
     path_name = sample "#" hap_index "#" seq_name
 
     # Normalize and validate walk
     normalized_walk = normalize_walk_w($7, path_name)
 
     if (normalized_walk != "" || error_count == 0) {
-        print path_name, genome_name, normalized_walk
+        print path_name, sample, haplotype_id, hap_origin, normalized_walk
     }
 }
 

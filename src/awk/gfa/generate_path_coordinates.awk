@@ -7,14 +7,13 @@
 #   - File 2: GFA file (P/O/W lines)
 #
 # Output:
-#   - STDOUT: path_segment_coordinate TSV (coord_id \t path_id \t segment_id \t coordinate \t segment_order)
-#   - path_file: path TSV (PATH \t path_id \t name \t genome_id \t subgraph_id \t length)
+#   - STDOUT: path_segment_coordinate TSV (path_id \t segment_id \t coordinate \t segment_order)
+#   - path_file: path TSV (PATH \t path_id \t genome_id \t subgraph_id \t length)
 #
 # Variables (set via -v):
 #   - path_file: output file path for path records
 #   - subgraph_id: subgraph ID for all paths
 #   - next_path_id: starting path ID (default: 1)
-#   - next_coord_id: starting coordinate ID (default: 1)
 #   - genome_map_file: optional file mapping path_name -> genome_id
 
 BEGIN {
@@ -22,11 +21,9 @@ BEGIN {
 
     # Initialize ID counters
     if (next_path_id == "") next_path_id = 1
-    if (next_coord_id == "") next_coord_id = 1
     if (subgraph_id == "") subgraph_id = 1
 
     path_id_counter = next_path_id
-    coord_id_counter = next_coord_id
 }
 
 # Phase 1: Load segment mapping (original_id -> internal_id, length)
@@ -103,10 +100,8 @@ function process_p_line(pname, walk_str,    n, segments, i, seg, seg_id, orient,
         seg_length = seg_len[internal_id]
         if (seg_length == "" || seg_length == 0) continue  # Skip zero-length segments
 
-        # Output: coord_id, path_id, segment_id, coordinate (INT8RANGE), segment_order
-        print coord_id_counter, path_id_counter, internal_id, "[" pos "," (pos + seg_length) ")", order
-
-        coord_id_counter++
+        # Output: path_id, segment_id, coordinate (INT8RANGE), segment_order
+        print path_id_counter, internal_id, "[" pos "," (pos + seg_length) ")", order
         order++
         pos += seg_length
         total_length = pos
@@ -115,7 +110,7 @@ function process_p_line(pname, walk_str,    n, segments, i, seg, seg_id, orient,
     # Output path record (only if has segments)
     if (order > 0) {
         genome_id = get_genome_id(pname)
-        print "PATH", path_id_counter, pname, genome_id, subgraph_id, total_length > path_file
+        print "PATH", path_id_counter, genome_id, subgraph_id, total_length > path_file
         path_id_counter++
     }
 }
@@ -145,9 +140,7 @@ function process_o_line(pname, walk_str,    n, segments, i, seg, seg_id, orient,
         seg_length = seg_len[internal_id]
         if (seg_length == "" || seg_length == 0) continue
 
-        print coord_id_counter, path_id_counter, internal_id, "[" pos "," (pos + seg_length) ")", order
-
-        coord_id_counter++
+        print path_id_counter, internal_id, "[" pos "," (pos + seg_length) ")", order
         order++
         pos += seg_length
         total_length = pos
@@ -155,7 +148,7 @@ function process_o_line(pname, walk_str,    n, segments, i, seg, seg_id, orient,
 
     if (order > 0) {
         genome_id = get_genome_id(pname)
-        print "PATH", path_id_counter, pname, genome_id, subgraph_id, total_length > path_file
+        print "PATH", path_id_counter, genome_id, subgraph_id, total_length > path_file
         path_id_counter++
     }
 }
@@ -179,9 +172,7 @@ function process_w_line(pname, walk_str,    i, c, seg_id, orient, internal_id, s
                 if (internal_id != "") {
                     seg_length = seg_len[internal_id]
                     if (seg_length != "" && seg_length > 0) {
-                        print coord_id_counter, path_id_counter, internal_id, "[" pos "," (pos + seg_length) ")", order
-
-                        coord_id_counter++
+                        print path_id_counter, internal_id, "[" pos "," (pos + seg_length) ")", order
                         order++
                         pos += seg_length
                         total_length = pos
@@ -204,9 +195,7 @@ function process_w_line(pname, walk_str,    i, c, seg_id, orient, internal_id, s
         if (internal_id != "") {
             seg_length = seg_len[internal_id]
             if (seg_length != "" && seg_length > 0) {
-                print coord_id_counter, path_id_counter, internal_id, "[" pos "," (pos + seg_length) ")", order
-
-                coord_id_counter++
+                print path_id_counter, internal_id, "[" pos "," (pos + seg_length) ")", order
                 order++
                 pos += seg_length
                 total_length = pos
@@ -216,7 +205,7 @@ function process_w_line(pname, walk_str,    i, c, seg_id, orient, internal_id, s
 
     if (order > 0) {
         genome_id = get_genome_id(pname)
-        print "PATH", path_id_counter, pname, genome_id, subgraph_id, total_length > path_file
+        print "PATH", path_id_counter, genome_id, subgraph_id, total_length > path_file
         path_id_counter++
     }
 }

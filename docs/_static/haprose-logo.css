@@ -1,0 +1,50 @@
+:root {
+  --haprose-logo-font: "Baloo 2", "Nunito", "Quicksand", "Varela Round",
+    "Trebuchet MS", "Arial", sans-serif;
+  --haprose-logo-weight: 800;
+  --haprose-logo-gradient: linear-gradient(
+    95deg,
+    #ff6b6b 0%,
+    #ff922b 24%,
+    #ffd43b 46%,
+    #69db7c 68%,
+    #4dabf7 100%
+  );
+  --haprose-logo-shadow: 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 2px 4px rgba(0, 0, 0, 0.12);
+}
+
+.mobile-header .brand,
+.sidebar-brand-text {
+  font-family: var(--haprose-logo-font);
+  font-weight: var(--haprose-logo-weight);
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+  line-height: 1;
+  display: inline-block;
+  color: #ff6b6b;
+  text-decoration: none;
+  text-rendering: geometricPrecision;
+  text-shadow: var(--haprose-logo-shadow);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.mobile-header .brand {
+  font-size: clamp(1.05rem, 2.4vw, 1.4rem);
+}
+
+.sidebar-brand-text {
+  font-size: clamp(1.1rem, 1.3vw, 1.35rem);
+}
+
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .mobile-header .brand,
+  .sidebar-brand-text {
+    background: var(--haprose-logo-gradient);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+  }
+}
