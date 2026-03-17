@@ -1078,7 +1078,7 @@ def format_annotations(
 
 @click.group()
 def main():
-    """Manage annotations in HAP."""
+    """Annotations management commands"""
     pass
 
 

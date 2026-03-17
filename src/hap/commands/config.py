@@ -19,10 +19,9 @@ from hap.lib.config import Config
 @click.group(
     "config",
     context_settings=hap.CTX_SETTINGS,
-    short_help="Get and set configurations",
 )
 def main():
-    """Configuration management commands."""
+    """Configuration management commands"""
 
 
 def _ensure_config_file(cfg: Config) -> None:
