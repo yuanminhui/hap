@@ -1,0 +1,15 @@
+[
+  {
+    "description": "First default region at start of chr1",
+    "type": "con",
+    "is_default": true,
+    "level_range_min": 0,
+    "coordinate_start_min": 0
+  },
+  {
+    "description": "A variant region",
+    "type": "var",
+    "is_default": false,
+    "level_range_min": 0
+  }
+]

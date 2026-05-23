@@ -8,7 +8,7 @@
 #
 # Output:
 #   - STDOUT: path_segment_coordinate TSV (path_id \t segment_id \t coordinate \t segment_order)
-#   - path_file: path TSV (PATH \t path_id \t genome_id \t subgraph_id \t length)
+#   - path_file: path TSV (PATH \t path_id \t genome_id \t subgraph_id \t length \t path_name)
 #
 # Variables (set via -v):
 #   - path_file: output file path for path records
@@ -110,7 +110,7 @@ function process_p_line(pname, walk_str,    n, segments, i, seg, seg_id, orient,
     # Output path record (only if has segments)
     if (order > 0) {
         genome_id = get_genome_id(pname)
-        print "PATH", path_id_counter, genome_id, subgraph_id, total_length > path_file
+        print "PATH", path_id_counter, genome_id, subgraph_id, total_length, pname > path_file
         path_id_counter++
     }
 }
@@ -148,7 +148,7 @@ function process_o_line(pname, walk_str,    n, segments, i, seg, seg_id, orient,
 
     if (order > 0) {
         genome_id = get_genome_id(pname)
-        print "PATH", path_id_counter, genome_id, subgraph_id, total_length > path_file
+        print "PATH", path_id_counter, genome_id, subgraph_id, total_length, pname > path_file
         path_id_counter++
     }
 }
@@ -205,7 +205,7 @@ function process_w_line(pname, walk_str,    i, c, seg_id, orient, internal_id, s
 
     if (order > 0) {
         genome_id = get_genome_id(pname)
-        print "PATH", path_id_counter, genome_id, subgraph_id, total_length > path_file
+        print "PATH", path_id_counter, genome_id, subgraph_id, total_length, pname > path_file
         path_id_counter++
     }
 }

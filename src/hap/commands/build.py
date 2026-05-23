@@ -1484,8 +1484,10 @@ def _extend_path_coords_for_non_original_segments(
     region_parent_segment = regions.set_index("id")["parent_segment"].to_dict()
 
     paths_by_name = {
-        row.name: int(row.id)
-        for row in paths_df.itertuples(index=False)
+        path_name: int(path_id)
+        for path_name, path_id in paths_df[["name", "id"]].itertuples(
+            index=False, name=None
+        )
     }
 
     def path_ids_for_paths(paths: list[str]) -> set[int]:
@@ -1613,8 +1615,10 @@ def _ensure_path_links_for_segments(
         for row in path_seg_coords_df.itertuples(index=False)
     }
     paths_by_name = {
-        row.name: int(row.id)
-        for row in paths_df.itertuples(index=False)
+        path_name: int(path_id)
+        for path_name, path_id in paths_df[["name", "id"]].itertuples(
+            index=False, name=None
+        )
     }
     segment_paths = segments.set_index("id")["paths"].to_dict()
 
@@ -1731,11 +1735,12 @@ def generate_path_data(
         if genome_map_path:
             cmd.extend(["-v", f"genome_map_file={genome_map_path}"])
 
-        cmd.extend([
-            "-f", awk_script,
-            seg_map_path,
-            gfa_filepath,
-        ])
+        input_files = [seg_map_path]
+        if genome_map_path:
+            input_files.append(genome_map_path)
+        input_files.append(gfa_filepath)
+
+        cmd.extend(["-f", awk_script, *input_files])
 
         # Redirect coordinate output to file
         with open(coord_file.name, 'w') as coord_out:
@@ -1756,6 +1761,7 @@ def generate_path_data(
                     continue
 
                 _, path_id, genome_id_str, subgraph_id_str, length_str = parts[:5]
+                path_name = parts[5] if len(parts) > 5 else None
 
                 # Resolve genome_id if not set (0 means unresolved)
                 genome_id = int(genome_id_str)
@@ -1771,6 +1777,7 @@ def generate_path_data(
                     "genome_id": genome_id,
                     "subgraph_id": int(subgraph_id_str),
                     "length": int(length_str),
+                    "name": path_name,
                 })
 
         # Load coordinate data
@@ -1793,12 +1800,19 @@ def generate_path_data(
         paths_df = pd.DataFrame(paths_data)
         path_seg_coords_df = pd.DataFrame(coord_data)
 
-        # Filter coordinates to only include paths that were accepted
-        if not paths_df.empty and not path_seg_coords_df.empty:
-            accepted_path_ids = set(paths_df['id'])
-            path_seg_coords_df = path_seg_coords_df[
-                path_seg_coords_df['path_id'].isin(accepted_path_ids)
-            ].reset_index(drop=True)
+        # Filter coordinates to only include paths that were accepted. If all
+        # paths were unresolved, coordinates must not be copied because their
+        # path_id values would violate the path foreign key.
+        if not path_seg_coords_df.empty:
+            if paths_df.empty:
+                path_seg_coords_df = pd.DataFrame(
+                    columns=["path_id", "segment_id", "coordinate", "segment_order"]
+                )
+            else:
+                accepted_path_ids = set(paths_df['id'])
+                path_seg_coords_df = path_seg_coords_df[
+                    path_seg_coords_df['path_id'].isin(accepted_path_ids)
+                ].reset_index(drop=True)
 
         # Type conversion
         if not paths_df.empty:
@@ -1827,6 +1841,36 @@ def generate_path_data(
                 os.unlink(genome_map_path)
             except OSError:
                 pass
+
+
+def infer_path_genome_map(
+    path_names: list[str],
+    id_map_genome: dict[tuple[str, int], int],
+) -> dict[str, str]:
+    """Infer path-to-genome mapping from PanSN-style path names.
+
+    GFA W paths are represented as `sample#hap#subgraph`. The path-coordinate
+    AWK helper needs explicit path -> genome mapping so it can emit path rows
+    with concrete genome IDs.
+    """
+
+    mapping: dict[str, str] = {}
+    for path_name in path_names:
+        parts = path_name.rsplit("#", 2)
+        if len(parts) == 3:
+            sample_name, haplotype_raw, _seq_name = parts
+        else:
+            sample_name, haplotype_raw = path_name, "0"
+
+        try:
+            haplotype_id = int(haplotype_raw)
+        except ValueError:
+            haplotype_id = 0
+
+        if (sample_name, haplotype_id) in id_map_genome:
+            mapping[path_name] = f"{sample_name}:{haplotype_id}:provided"
+
+    return mapping
 
 
 def update_ids_by_subgraph(
@@ -2063,8 +2107,17 @@ def hap2db(
                     gfa_filepath = subgraph_gfa_map.get(subgraph_name)
 
                 if gfa_filepath:
+                    path_genome_map = infer_path_genome_map(
+                        meta.get("paths", []),
+                        id_map_genome,
+                    )
                     paths_df, path_seg_coords_df = generate_path_data(
-                        gfa_filepath, st, id_map_genome, subgraph_id, conn
+                        gfa_filepath,
+                        st,
+                        id_map_genome,
+                        subgraph_id,
+                        conn,
+                        path_genome_map=path_genome_map,
                     )
                     if not paths_df.empty:
                         paths_df = paths_df.astype({
@@ -2205,7 +2258,9 @@ def hap2db(
                         tmp_segment_org_id, sep="\t", index=False, header=False
                     )
                     if not paths_df.empty:
-                        paths_df.to_csv(tmp_path, sep="\t", index=False, header=False)
+                        paths_df[["id", "genome_id", "subgraph_id", "length"]].to_csv(
+                            tmp_path, sep="\t", index=False, header=False
+                        )
                     if not path_seg_coords_df.empty:
                         path_seg_coords_df.to_csv(
                             tmp_path_seg_coord, sep="\t", index=False, header=False, na_rep=""

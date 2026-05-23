@@ -62,10 +62,10 @@ class GFA:
             "head",
             "-n",
             "1",
-            self.filepath,
+            f'"{self.filepath}"',
             "|",
             "awk",
-            """'$1 == "H" {for (i = 2; i <= NF; ++i) if ($i ~ /^VN:/) {split($i, a, ":"); print a[3]}}'""",
+            "'" + '$1 == "H" {for (i = 2; i <= NF; ++i) if ($i ~ /^VN:/) {split($i, a, ":"); print a[3]}}' + "'",
         ]
         return_text = subprocess.check_output(
             " ".join(cmd_get_version_from_header), shell=True, text=True
@@ -81,8 +81,8 @@ class GFA:
                 "1",
                 "-o",
                 "-E",
-                "'^(E|J|W)'",
-                self.filepath,
+                "'^([EJW])'",
+                f'"{self.filepath}"',
             ]
             res = subprocess.run(
                 " ".join(cmd_judge_version_by_sign),
@@ -90,6 +90,7 @@ class GFA:
                 text=True,
                 capture_output=True,
             )
+            version = 1.0  # Default version if no sign found
             if res.returncode == 0:
                 char = res.stdout.rstrip("\n")
                 if char == "E":
@@ -98,15 +99,13 @@ class GFA:
                     version = 1.2
                 elif char == "W":
                     version = 1.1  # XXX: May be 1.2 too
-            elif res.returncode == 1:
-                version = 1.0  # HACK: Assume GFA 1.0 if no sign found
         finally:
             return version
 
     def contains_segment(self) -> bool:
         """Check if the GFA file contains segment record."""
 
-        cmd = ["LC_ALL=C", "grep", "-m", "1", "^S", self.filepath]
+        cmd = ["LC_ALL=C", "grep", "-m", "1", "^S", f'"{self.filepath}"']
         res = subprocess.run(" ".join(cmd), shell=True, capture_output=True)
         if res.returncode == 0:
             return True
@@ -117,9 +116,9 @@ class GFA:
         """Check if the GFA file contains edge record."""
 
         if self.version < 2:
-            cmd = ["LC_ALL=C", "grep", "-m", "1", "^L", self.filepath]
+            cmd = ["LC_ALL=C", "grep", "-m", "1", "^L", f'"{self.filepath}"']
         else:  # GFA 2
-            cmd = ["LC_ALL=C", "grep", "-m", "1", "^E", self.filepath]
+            cmd = ["LC_ALL=C", "grep", "-m", "1", "^E", f'"{self.filepath}"']
         res = subprocess.run(" ".join(cmd), shell=True, capture_output=True)
         if res.returncode == 0:
             return True
@@ -130,11 +129,11 @@ class GFA:
         """Check if the GFA file contains path record."""
 
         if self.version == 1.0:
-            cmd = ["LC_ALL=C", "grep", "-m", "1", "^P", self.filepath]
+            cmd = ["LC_ALL=C", "grep", "-m", "1", "^P", f'"{self.filepath}"']
         elif self.version == 2.0:
-            cmd = ["LC_ALL=C", "grep", "-m", "1", "-E", "'^(O|U)'", self.filepath]
+            cmd = ["LC_ALL=C", "grep", "-m", "1", "-E", "'^(O|U)'", f'"{self.filepath}"']
         else:
-            cmd = ["LC_ALL=C", "grep", "-m", "1", "^W", self.filepath]
+            cmd = ["LC_ALL=C", "grep", "-m", "1", "^W", f'"{self.filepath}"']
         res = subprocess.run(" ".join(cmd), shell=True, capture_output=True)
         if res.returncode == 0:
             return True
@@ -538,7 +537,7 @@ class GFA:
             return []
         return []
 
-    def separate_sequence(self, output_dir: str = None):
+    def separate_sequence(self, output_dir: str = None, overwrite: bool = False):
         """
         Move the sequences in segment records to `{basename}.seq.tsv`, leaving
         a `*` as placeholder, add `LN` tag if not exist, and return the file
@@ -546,7 +545,8 @@ class GFA:
 
         Args:
             output_dir (str): The directory to save the sequence file and the
-            modified GFA file.
+                modified GFA file.
+            overwrite (bool): If True, overwrite existing files without confirmation.
 
         Returns:
             tuple[str, str]: The file paths of the modified GFA file and the
@@ -567,18 +567,21 @@ class GFA:
         else:
             os.makedirs(output_dir, exist_ok=True)
 
-        output_file = output_dir + "/" + basename + ".gfa"
-        if os.path.exists(output_file):
-            if click.confirm(
+        output_file = os.path.normpath(os.path.join(output_dir, basename + ".gfa"))
+        if os.path.exists(output_file) and os.path.abspath(output_file) != os.path.abspath(self.filepath):
+            if overwrite or click.confirm(
                 f"{output_file} already exists. Overwrite it?", abort=True
             ):
                 os.remove(output_file)
+
         if not self.contains_sequence():
-            shutil.copy(self.filepath, output_file)
+            if os.path.abspath(output_file) != os.path.abspath(self.filepath):
+                shutil.copy(self.filepath, output_file)
             return output_file, None
-        sequence_file = output_dir + "/" + basename + ".seq.tsv"
+
+        sequence_file = os.path.normpath(os.path.join(output_dir, basename + ".seq.tsv"))
         if os.path.exists(sequence_file):
-            if click.confirm(
+            if overwrite or click.confirm(
                 f"{sequence_file} already exists. Overwrite it?", abort=True
             ):
                 os.remove(sequence_file)
@@ -623,7 +626,7 @@ class GFA:
             "|",
             "awk",
             "-f",
-            awk_script_file,
+            f'"{awk_script_file}"',
             "-e",
         ]
         # `grep_1` -- Get records containing subgraph names
@@ -643,7 +646,7 @@ class GFA:
             awk.append("'{print $4}'")
         sort = ["|", "sort", "-u"]
 
-        cmd = locale + grep_1 + [self.filepath] + awk + sort
+        cmd = locale + grep_1 + [f'"{self.filepath}"'] + awk + sort
         if chr_only:
             # `grep_2` -- Filter names that start with `chr` (case insensitive)
             grep_2 = ["|"] + grep + ["-E", "'^chr[[:digit:]]{0,2}[[:alpha:]]{0,1}$'"]
@@ -691,24 +694,24 @@ class GFA:
         cmd_paths = [
             "awk",
             "-v", f"subgraph_name={name}",
-            "-f", awk_pansn,
-            "-f", awk_extract_paths,
-            self.filepath,
-            ">", path_records_file
+            "-f", f'"{awk_pansn}"',
+            "-f", f'"{awk_extract_paths}"',
+            f'"{self.filepath}"',
+            ">", f'"{path_records_file}"'
         ]
 
         # Step 2: Extract structural lines (H/S/L/E) for segments in paths
         cmd_main = [
             "awk",
-            "-f", awk_extract_main,
-            path_records_file,
-            self.filepath,
-            ">", main_file
+            "-f", f'"{awk_extract_main}"',
+            f'"{path_records_file}"',
+            f'"{self.filepath}"',
+            ">", f'"{main_file}"'
         ]
 
         # Step 3: Concatenate main records with path records
         cmd_concat = [
-            "cat", main_file, path_records_file, ">", output_file
+            "cat", f'"{main_file}"', f'"{path_records_file}"', ">", f'"{output_file}"'
         ]
 
         try:

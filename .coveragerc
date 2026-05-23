@@ -1,0 +1,27 @@
+[run]
+branch = true
+source = src/hap
+omit =
+    */tests/*
+    */__pycache__/*
+    */site-packages/*
+
+[report]
+show_missing = true
+skip_covered = false
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    if self.debug:
+    if settings.DEBUG
+    raise AssertionError
+    raise NotImplementedError
+    if 0:
+    if __name__ == .__main__.:
+    class .*\bProtocol\b:
+
+[html]
+directory = ../test-artifacts/coverage/hap-html
+
+[xml]
+output = ../test-artifacts/coverage/hap-coverage.xml

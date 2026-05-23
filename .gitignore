@@ -9,6 +9,9 @@
 /docs/_build/
 /src/*.egg-info/
 __pycache__/
+node_modules/
+.pytest_cache/
+htmlcov/
 
 data/*
 !data/mini-example/

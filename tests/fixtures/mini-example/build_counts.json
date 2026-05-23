@@ -1,0 +1,9 @@
+{
+  "pangenomes": 1,
+  "subgraphs": 1,
+  "regions_min": 5,
+  "segments_min": 10,
+  "paths": 3,
+  "samples": 3,
+  "genomes": 3
+}
